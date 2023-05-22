@@ -2,11 +2,13 @@
 #include <Utils/InfoString.hpp>
 
 #include "Discovery.hpp"
+#include "Events.hpp"
+#include "Node.hpp"
 #include "Party.hpp"
 #include "ServerList.hpp"
+#include "TextRenderer.hpp"
+#include "Toast.hpp"
 #include "UIFeeder.hpp"
-
-#include <version.hpp>
 
 namespace Components
 {
@@ -118,13 +120,13 @@ namespace Components
 			{
 				if (!sorting && !Maps::CheckMapInstalled(server->mapname))
 				{
-					return Utils::String::VA("^1%s", Game::UI_LocalizeMapName(server->mapname.data()));
+					return Utils::String::VA("^1%s", Localization::LocalizeMapName(server->mapname.data()));
 				}
 
-				return Game::UI_LocalizeMapName(server->mapname.data());
+				return Localization::LocalizeMapName(server->mapname.data());
 			}
 
-			return Utils::String::VA("^3%s", Game::UI_LocalizeMapName(server->mapname.data()));
+			return Utils::String::VA("^3%s", Localization::LocalizeMapName(server->mapname.data()));
 		}
 
 		case Column::Players:
@@ -175,13 +177,13 @@ namespace Components
 	{
 		CurrentServer = index;
 
-		auto* info = GetCurrentServer();
+		auto* serverInfo = GetCurrentServer();
 
-		if (info)
+		if (serverInfo)
 		{
 			UIServerSelected.set(true);
-			UIServerSelectedMap.set(info->mapname);
-			Dvar::Var("ui_serverSelectedGametype").set(info->gametype);
+			UIServerSelectedMap.set(serverInfo->mapname);
+			Dvar::Var("ui_serverSelectedGametype").set(serverInfo->gametype);
 		}
 		else
 		{
@@ -194,7 +196,7 @@ namespace Components
 		auto* list = GetList();
 		if (!list) return;
 
-		std::vector tempList(*list);
+		const std::vector tempList(*list);
 
 		if (tempList.empty())
 		{
@@ -209,7 +211,7 @@ namespace Components
 			RefreshContainer.sendCount = 0;
 			RefreshContainer.sentCount = 0;
 
-			for (auto& server : tempList)
+			for (const auto& server : tempList)
 			{
 				InsertRequest(server.addr);
 			}
@@ -274,13 +276,7 @@ namespace Components
 	void ServerList::Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
 		Dvar::Var("ui_serverSelected").set(false);
-		//Localization::Set("MPUI_SERVERQUERIED", "Sent requests: 0/0");
 
-#if 0
-		OnlineList.clear();
-		OfflineList.clear();
-		FavouriteList.clear();
-#endif
 		auto* list = GetList();
 		if (list) list->clear();
 
@@ -307,7 +303,7 @@ namespace Components
 			if (!GetMasterServer(masterServerName, masterPort, masterServerAddr))
 			{
 				Logger::Print("Could not resolve address for {}:{}", masterServerName, masterPort);
-				Toast::Show("cardicon_headshot", "^1Error", Utils::String::VA("Could not resolve address for %s:%i", masterServerName, masterPort), 5000);
+				Toast::Show("cardicon_headshot", "^1Error", std::format("Could not resolve address for {}:{}", masterServerName, masterPort), 5000);
 				UseMasterServer = false;
 				return;
 			}
@@ -318,10 +314,10 @@ namespace Components
 
 			RefreshContainer.awatingList = true;
 			RefreshContainer.awaitTime = Game::Sys_Milliseconds();
-			RefreshContainer.host = Network::Address(Utils::String::VA("%s:%u", masterServerName, masterPort));
+			RefreshContainer.host = Network::Address(std::format("{}:{}", masterServerName, masterPort));
 
-			Logger::Print("Sending serverlist request to master\n");
-			Network::SendCommand(RefreshContainer.host, "getservers", Utils::String::VA("IW4 %i full empty", PROTOCOL));
+			Logger::Print("Sending server list request to master\n");
+			Network::SendCommand(RefreshContainer.host, "getservers", std::format("IW4 {} full empty", PROTOCOL));
 		}
 		else if (IsFavouriteList())
 		{
@@ -343,7 +339,7 @@ namespace Components
 			}
 			catch (const nlohmann::json::parse_error& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 				return;
 			}
 
@@ -389,7 +385,7 @@ namespace Components
 			}
 			catch (const nlohmann::json::parse_error& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 				return;
 			}
 
@@ -417,8 +413,6 @@ namespace Components
 		if (list) list->clear();
 		
 		RefreshVisibleListInternal(UIScript::Token(), nullptr);
-		
-		Game::ShowMessageBox("Server removed from favourites.", "Success");
 	}
 
 	void ServerList::LoadFavourties()
@@ -444,7 +438,7 @@ namespace Components
 		}
 		catch (const nlohmann::json::parse_error& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 			return;
 		}
 
@@ -471,7 +465,7 @@ namespace Components
 		container.sent = false;
 		container.target = address;
 
-		bool alreadyInserted = false;
+		auto alreadyInserted = false;
 		for (auto &server : RefreshContainer.servers)
 		{
 			if (server.target == container.target)
@@ -510,98 +504,99 @@ namespace Components
 		for (auto i = RefreshContainer.servers.begin(); i != RefreshContainer.servers.end();)
 		{
 			// Our desired server
-			if ((i->target == address) && i->sent)
+			if ((i->target != address) || !i->sent)
 			{
-				// Challenge did not match
-				if (i->challenge != info.get("challenge"))
+				++i;
+				continue;
+			}
+
+			// Challenge did not match
+			if (i->challenge != info.get("challenge"))
+			{
+				// Shall we remove the server from the queue?
+				// Better not, it might send a second response with the correct challenge.
+				// This might happen when users refresh twice (or more often) in a short period of time
+				break;
+			}
+
+			ServerInfo server;
+			server.hostname = info.get("hostname");
+			server.mapname = info.get("mapname");
+			server.gametype = info.get("gametype");
+			server.version = info.get("version");
+			server.mod = info.get("fs_game");
+			server.matchType = std::strtol(info.get("matchtype").data(), nullptr, 10);
+			server.clients = std::strtol(info.get("clients").data(), nullptr, 10);
+			server.bots = std::strtol(info.get("bots").data(), nullptr, 10);
+			server.securityLevel = std::strtol(info.get("securityLevel").data(), nullptr, 10);
+			server.maxClients = std::strtol(info.get("sv_maxclients").data(), nullptr, 10);
+			server.password = info.get("isPrivate") == "1"s;
+			server.aimassist = info.get("aimAssist") == "1";
+			server.voice = info.get("voiceChat") == "1"s;
+			server.hardcore = info.get("hc") == "1"s;
+			server.svRunning = info.get("sv_running") == "1"s;
+			server.ping = (Game::Sys_Milliseconds() - i->sendTime);
+			server.addr = address;
+
+			std::hash<ServerInfo> hashFn;
+			server.hash = hashFn(server);
+
+			server.hostname = TextRenderer::StripMaterialTextIcons(server.hostname);
+			server.mapname = TextRenderer::StripMaterialTextIcons(server.mapname);
+			server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
+			server.mod = TextRenderer::StripMaterialTextIcons(server.mod);
+
+			// Remove server from queue
+			i = RefreshContainer.servers.erase(i);
+
+			// Servers with more than 18 players or less than 0 players are faking for sure
+			// So lets ignore those
+			if (static_cast<std::size_t>(server.clients) > Game::MAX_CLIENTS || static_cast<std::size_t>(server.maxClients) > Game::MAX_CLIENTS)
+			{
+				return;
+			}
+
+			// Check if already inserted and remove
+			auto* list = GetList();
+			if (!list) return;
+
+			std::size_t k = 0;
+			for (auto j = list->begin(); j != list->end(); ++k)
+			{
+				if (j->addr == address)
 				{
-					// Shall we remove the server from the queue?
-					// Better not, it might send a second response with the correct challenge.
-					// This might happen when users refresh twice (or more often) in a short period of time
-					break;
+					j = list->erase(j);
 				}
-
-				ServerInfo server;
-				server.hostname = info.get("hostname");
-				server.mapname = info.get("mapname");
-				server.gametype = info.get("gametype");
-				server.shortversion = info.get("shortversion");
-				server.mod = info.get("fs_game");
-				server.matchType = std::strtol(info.get("matchtype").data(), nullptr, 10);
-				server.clients = std::strtol(info.get("clients").data(), nullptr, 10);
-				server.bots = std::strtol(info.get("bots").data(), nullptr, 10);
-				server.securityLevel = std::strtol(info.get("securityLevel").data(), nullptr, 10);
-				server.maxClients = std::strtol(info.get("sv_maxclients").data(), nullptr, 10);
-				server.password = info.get("isPrivate") == "1"s;
-				server.aimassist = info.get("aimAssist") == "1";
-				server.voice = info.get("voiceChat") == "1"s;
-				server.hardcore = info.get("hc") == "1"s;
-				server.svRunning = info.get("sv_running") == "1"s;
-				server.ping = (Game::Sys_Milliseconds() - i->sendTime);
-				server.addr = address;
-
-				server.hostname = TextRenderer::StripMaterialTextIcons(server.hostname);
-				server.mapname = TextRenderer::StripMaterialTextIcons(server.mapname);
-				server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
-				server.mod = TextRenderer::StripMaterialTextIcons(server.mod);
-
-				// Remove server from queue
-				i = RefreshContainer.servers.erase(i);
-
-				// Servers with more than 18 players or less than 0 players are faking for sure
-				// So lets ignore those
-				if (server.clients > 18 || server.maxClients > 18 || server.clients < 0 || server.maxClients < 0)
+				else
 				{
-					return;
+					++j;
 				}
+			}
 
-				// Check if already inserted and remove
-				auto* list = GetList();
-				if (!list) return;
-
-				std::size_t k = 0;
-				for (auto j = list->begin(); j != list->end(); ++k)
+			// Also remove from visible list
+			for (auto j = VisibleList.begin(); j != VisibleList.end();)
+			{
+				if (*j == k)
 				{
-					if (j->addr == address)
-					{
-						j = list->erase(j);
-					}
-					else
-					{
-						++j;
-					}
+					j = VisibleList.erase(j);
 				}
-
-				// Also remove from visible list
-				for (auto j = VisibleList.begin(); j != VisibleList.end();)
+				else
 				{
-					if (*j == k)
-					{
-						j = VisibleList.erase(j);
-					}
-					else
-					{
-						++j;
-					}
+					++j;
 				}
+			}
 
-				if (info.get("gamename") == "IW4"s && server.matchType
-#if !defined(DEBUG) && defined(VERSION_FILTER)
-					&& CompareVersion(server.shortversion, SHORTVERSION)
-#endif
-					)
+			if (info.get("gamename") == "IW4"s && server.matchType)
+			{
+				auto* lList = GetList();
+				if (lList)
 				{
-					auto* lList = GetList();
-					if (lList)
+					if (!IsServerDuplicate(lList, server))
 					{
 						lList->push_back(server);
 						RefreshVisibleListInternal(UIScript::Token(), nullptr);
 					}
 				}
-			}
-			else
-			{
-				++i;
 			}
 		}
 	}
@@ -626,12 +621,25 @@ namespace Components
 			}
 			catch (const std::exception& ex)
 			{
-				Logger::Warning(Game::CON_CHANNEL_CONSOLEONLY, "{} while performing numeric comparison between {} and {}\n", ex.what(), subVersions1[i], subVersions2[i]);
+				Logger::PrintError(Game::CON_CHANNEL_ERROR, "{} while performing numeric comparison between {} and {}\n", ex.what(), subVersions1[i], subVersions2[i]);
 				return false;
 			}
 		}
 
 		return true;
+	}
+
+	bool ServerList::IsServerDuplicate(const std::vector<ServerInfo>* list, const ServerInfo& server)
+	{
+		for (auto l = list->begin(); l != list->end(); ++l)
+		{
+			if (l->hash == server.hash)
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	ServerList::ServerInfo* ServerList::GetCurrentServer()
@@ -730,6 +738,7 @@ namespace Components
 			}
 		}
 
+		const auto challenge = Utils::Cryptography::Rand::GenerateChallenge();
 		auto requestLimit = NETServerQueryLimit.get<int>();
 		for (std::size_t i = 0; i < RefreshContainer.servers.size() && requestLimit > 0; ++i)
 		{
@@ -741,14 +750,11 @@ namespace Components
 			requestLimit--;
 
 			server->sendTime = Game::Sys_Milliseconds();
-			server->challenge = Utils::Cryptography::Rand::GenerateChallenge();
+			server->challenge = challenge;
 
 			++RefreshContainer.sentCount;
 
 			Network::SendCommand(server->target, "getinfo", server->challenge);
-
-			// Display in the menu, like in CoD4 - Disabled to avoid spamming?
-			//Localization::Set("MPUI_SERVERQUERIED", Utils::String::VA("Sent requests: %d/%d", ServerList::RefreshContainer.sentCount, ServerList::RefreshContainer.sendCount));
 		}
 
 		UpdateVisibleInfo();
@@ -784,17 +790,17 @@ namespace Components
 
 	void ServerList::UpdateVisibleInfo()
 	{
-		static int servers = 0;
-		static int players = 0;
-		static int bots = 0;
+		static auto servers = 0;
+		static auto players = 0;
+		static auto bots = 0;
 
-		auto list = GetList();
+		auto* list = GetList();
 
 		if (list)
 		{
-			int newSevers = list->size();
-			int newPlayers = 0;
-			int newBots = 0;
+			auto newSevers = static_cast<int>(list->size());
+			auto newPlayers = 0;
+			auto newBots = 0;
 
 			for (std::size_t i = 0; i < list->size(); ++i)
 			{
@@ -808,7 +814,7 @@ namespace Components
 				players = newPlayers;
 				bots = newBots;
 
-				Localization::Set("MPUI_SERVERQUERIED", Utils::String::VA("Servers: %i\nPlayers: %i (%i)", servers, players, bots));
+				Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
 			}
 		}
 	}
@@ -821,8 +827,10 @@ namespace Components
 	bool ServerList::IsServerListOpen()
 	{
 		auto* menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
-		if (!menu) 
+		if (!menu)
+		{
 			return false;
+		}
 
 		return Game::Menu_IsVisible(Game::uiContext, menu);
 	}
@@ -860,9 +868,9 @@ namespace Components
 
 			std::lock_guard _(RefreshContainer.mutex);
 
-			int offset = 0;
-			auto count = RefreshContainer.servers.size();
-			MasterEntry* entry = nullptr;
+			auto offset = 0;
+			const auto count = RefreshContainer.servers.size();
+			MasterEntry* entry;
 
 			// Find first entry
 			do
@@ -926,7 +934,7 @@ namespace Components
 		UIScript::Add("CreateListFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
 			auto* serverInfo = GetCurrentServer();
-			if (info)
+			if (info && serverInfo && serverInfo->addr.isValid())
 			{
 				StoreFavourite(serverInfo->addr.getString());
 			}
@@ -934,7 +942,11 @@ namespace Components
 
 		UIScript::Add("CreateFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
-			StoreFavourite(Dvar::Var("ui_favoriteAddress").get<std::string>());
+			const auto value = Dvar::Var("ui_favoriteAddress").get<std::string>();
+			if (!value.empty())
+			{
+				StoreFavourite(value);
+			}
 		});
 
 		UIScript::Add("CreateCurrentServerFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
@@ -958,18 +970,6 @@ namespace Components
 			}
 		});
 
-#ifdef _DEBUG
-		Command::Add("playerCount", [](Command::Params*)
-		{
-			auto count = 0;
-			for (const auto& server : OnlineList)
-			{
-				count += server.clients;
-			}
-
-			Logger::Debug("There are {} players playing", count);
-		});
-#endif
 		// Add required ownerDraws
 		UIScript::AddOwnerDraw(220, UpdateSource);
 		UIScript::AddOwnerDraw(253, UpdateGameType);
@@ -978,7 +978,7 @@ namespace Components
 		Scheduler::Loop(Frame, Scheduler::Pipeline::CLIENT);
 	}
 
-	ServerList::~ServerList()
+	void ServerList::preDestroy()
 	{
 		std::lock_guard _(RefreshContainer.mutex);
 		RefreshContainer.awatingList = false;

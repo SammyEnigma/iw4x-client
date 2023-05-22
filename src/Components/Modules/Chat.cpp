@@ -1,9 +1,12 @@
 #include <STDInclude.hpp>
 #include "Chat.hpp"
+#include "Events.hpp"
 #include "PlayerName.hpp"
+#include "TextRenderer.hpp"
 #include "Voice.hpp"
 
 #include "GSC/Script.hpp"
+#include "GSC/ScriptExtension.hpp"
 
 namespace Components
 {
@@ -22,12 +25,12 @@ namespace Components
 	// Have only one instance of IW4x read/write the file
 	std::unique_lock<Utils::NamedMutex> Chat::Lock()
 	{
-		static Utils::NamedMutex mutex{"iw4x-mute-list-lock"};
+		static Utils::NamedMutex mutex{ "iw4x-mute-list-lock" };
 		std::unique_lock lock{mutex};
 		return lock;
 	}
 
-	const char* Chat::EvaluateSay(char* text, Game::gentity_t* player, int mode)
+	const char* Chat::EvaluateSay(char* text, Game::gentity_s* player, int mode)
 	{
 		SendChat = true;
 
@@ -39,24 +42,17 @@ namespace Components
 		// Prevent callbacks from adding a new callback (would make the vector iterator invalid)
 		CanAddCallback = false;
 
-		// Chat messages sent through the console do not begin with \x15
+		// Chat messages sent through the console do not begin with \x15. In some cases it contains \x14
 		auto msgIndex = 0;
-		if (text[msgIndex] == '\x15')
+		while (text[msgIndex] == '\x15' || text[msgIndex] == '\x14')
 		{
-			msgIndex = 1;
+			++msgIndex;
 		}
 
 		if (text[msgIndex] == '/')
 		{
 			SendChat = false;
-
-			if (msgIndex == 1)
-			{
-				// Overwrite / with \x15
-				text[msgIndex] = text[msgIndex - 1];
-			}
-			// Skip over the first character
-			++text;
+			++msgIndex;
 		}
 
 		if (IsMuted(player))
@@ -71,12 +67,15 @@ namespace Components
 			Game::SV_GameSendServerCommand(player - Game::g_entities, Game::SV_CMD_CAN_IGNORE, Utils::String::VA("%c \"Chat is disabled\"", 0x65));
 		}
 
-		// Message might be empty after processing the '/'
+		// Message might be empty after the special characters or '/'
 		if (text[msgIndex] == '\0')
 		{
 			SendChat = false;
 			return text;
 		}
+
+		TextRenderer::StripMaterialTextIcons(text, text, std::strlen(text) + 1);
+		Logger::Print("{}: {}\n", Game::svs_clients[player - Game::g_entities].name, (text + msgIndex));
 
 		for (const auto& callback : SayCallbacks)
 		{
@@ -85,8 +84,6 @@ namespace Components
 				SendChat = false;
 			}
 		}
-
-		TextRenderer::StripMaterialTextIcons(text, text, std::strlen(text) + 1);
 
 		Game::Scr_AddEntity(player);
 		Game::Scr_AddString(text + msgIndex);
@@ -278,7 +275,7 @@ namespace Components
 		return result;
 	}
 
-	bool Chat::IsMuted(const Game::client_t* cl)
+	bool Chat::IsMuted(const Game::client_s* cl)
 	{
 		const auto clientNum = cl - Game::svs_clients;
 		const auto xuid = Game::svs_clients[clientNum].steamID;
@@ -291,7 +288,7 @@ namespace Components
 		return result;
 	}
 
-	void Chat::MuteClient(const Game::client_t* client)
+	void Chat::MuteClient(const Game::client_s* client)
 	{
 		const auto xuid = client->steamID;
 		MutedList.access([&](muteList& clients)
@@ -304,7 +301,7 @@ namespace Components
 		Game::SV_GameSendServerCommand(client - Game::svs_clients, Game::SV_CMD_CAN_IGNORE, Utils::String::VA("%c \"You were muted\"", 0x65));
 	}
 
-	void Chat::UnmuteClient(const Game::client_t* client)
+	void Chat::UnmuteClient(const Game::client_s* client)
 	{
 		UnmuteInternal(client->steamID);
 
@@ -355,7 +352,7 @@ namespace Components
 		}
 		catch (const std::exception& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 			return;
 		}
 
@@ -384,13 +381,13 @@ namespace Components
 		});
 	}
 
-	void Chat::AddChatCommands()
+	void Chat::AddServerCommands()
 	{
-		Command::AddSV("muteClient", [](Command::Params* params)
+		Command::AddSV("muteClient", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
@@ -409,11 +406,11 @@ namespace Components
 			}
 		});
 
-		Command::AddSV("unmute", [](Command::Params* params)
+		Command::AddSV("unmute", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
@@ -450,86 +447,90 @@ namespace Components
 			}
 		});
 
-		Command::AddSV("say", [](Command::Params* params)
+		Command::AddSV("say", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
 			if (params->size() < 2) return;
 
-			auto message = params->join(1);
-			auto name = sv_sayName.get<std::string>();
+			const auto message = params->join(1);
+			const auto name = sv_sayName.get<std::string>();
 
 			if (!name.empty())
 			{
 				Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}: {}\"", 0x68, name, message));
-				Logger::Print(Game::CON_CHANNEL_SERVER, "{}: {}\n", name, message);
+				Logger::Print("{}: {}\n", name, message);
 			}
 			else
 			{
 				Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"Console: {}\"", 0x68, message));
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Console: {}\n", message);
+				Logger::Print("Console: {}\n", message);
 			}
 		});
 
-		Command::AddSV("tell", [](Command::Params* params)
+		Command::AddSV("tell", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
 			if (params->size() < 3) return;
 
-			const auto client = std::atoi(params->get(1));
-			auto message = params->join(2);
-			auto name = sv_sayName.get<std::string>();
+			const auto parsedInput = std::strtoul(params->get(1), nullptr, 10);
+			const auto clientNum = static_cast<int>(std::min<std::size_t>(parsedInput, Game::MAX_CLIENTS));
+
+			const auto message = params->join(2);
+			const auto name = sv_sayName.get<std::string>();
 
 			if (!name.empty())
 			{
-				Game::SV_GameSendServerCommand(client, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}: {}\"", 0x68, name.data(), message));
-				Logger::Print(Game::CON_CHANNEL_SERVER, "{} -> {}: {}\n", name, client, message);
+				Game::SV_GameSendServerCommand(clientNum, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}: {}\"", 0x68, name.data(), message));
+				Logger::Print("{} -> {}: {}\n", name, clientNum, message);
 			}
 			else
 			{
-				Game::SV_GameSendServerCommand(client, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"Console: {}\"", 0x68, message));
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Console -> {}: {}\n", client, message);
+				Game::SV_GameSendServerCommand(clientNum, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"Console: {}\"", 0x68, message));
+				Logger::Print("Console -> {}: {}\n", clientNum, message);
 			}
 		});
 
-		Command::AddSV("sayraw", [](Command::Params* params)
+		Command::AddSV("sayraw", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
 			if (params->size() < 2) return;
 
-			auto message = params->join(1);
+			const auto message = params->join(1);
 			Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}\"", 0x68, message));
-			Logger::Print(Game::CON_CHANNEL_SERVER, "Raw: {}\n", message);
+			Logger::Print("Raw: {}\n", message);
 		});
 
-		Command::AddSV("tellraw", [](Command::Params* params)
+		Command::AddSV("tellraw", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
-				Logger::Print(Game::CON_CHANNEL_SERVER, "Server is not running.\n");
+				Logger::Print("Server is not running.\n");
 				return;
 			}
 
 			if (params->size() < 3) return;
 
-			const auto client = atoi(params->get(1));
-			std::string message = params->join(2);
-			Game::SV_GameSendServerCommand(client, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}\"", 0x68, message));
-			Logger::Print(Game::CON_CHANNEL_SERVER, "Raw -> {}: {}\n", client, message);
+			const auto parsedInput = std::strtoul(params->get(1), nullptr, 10);
+			const auto clientNum = static_cast<int>(std::min<std::size_t>(parsedInput, Game::MAX_CLIENTS));
+
+			const auto message = params->join(2);
+			Game::SV_GameSendServerCommand(clientNum, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} \"{}\"", 0x68, message));
+			Logger::Print("Raw -> {}: {}\n", clientNum, message);
 		});
 
 		sv_sayName = Dvar::Register<const char*>("sv_sayName", "^7Console", Game::DVAR_NONE, "The alias of the server when broadcasting a chat message");
@@ -585,32 +586,32 @@ namespace Components
 
 	void Chat::AddScriptFunctions()
 	{
-		Script::AddFunction("OnPlayerSay", [] // gsc: OnPlayerSay(<function>)
+		GSC::Script::AddFunction("OnPlayerSay", [] // gsc: OnPlayerSay(<function>)
 		{
 			if (Game::Scr_GetNumParam() != 1)
 			{
-				Game::Scr_Error("^1OnPlayerSay: Needs one function pointer!\n");
+				Game::Scr_Error("OnPlayerSay: Needs one function pointer!");
 				return;
 			}
 
 			if (!CanAddCallback)
 			{
-				Game::Scr_Error("^1OnPlayerSay: Cannot add a callback in this context");
+				Game::Scr_Error("OnPlayerSay: Cannot add a callback in this context");
 				return;
 			}
 
-			const auto* func = Script::GetCodePosForParam(0);
+			const auto* func = GSC::ScriptExtension::GetCodePosForParam(0);
 			SayCallbacks.emplace_back(func);
 		});
 	}
 
 	Chat::Chat()
 	{
-		AssertOffset(Game::client_t, steamID, 0x43F00);
+		AssertOffset(Game::client_s, steamID, 0x43F00);
 
 		cg_chatWidth = Dvar::Register<int>("cg_chatWidth", 52, 1, std::numeric_limits<int>::max(), Game::DVAR_ARCHIVE, "The normalized maximum width of a chat message");
 		sv_disableChat = Dvar::Register<bool>("sv_disableChat", false, Game::DVAR_NONE, "Disable chat messages from clients");
-		Events::OnSVInit(AddChatCommands);
+		Events::OnSVInit(AddServerCommands);
 
 		LoadMutedList();
 
@@ -621,6 +622,12 @@ namespace Components
 
 		// Change logic that does word splitting with new lines for chat messages to support fonticons
 		Utils::Hook(0x592E10, CG_AddToTeamChat_Stub, HOOK_JUMP).install()->quick();
+
+		// Add back removed command from CoD4
+		Command::Add("mp_QuickMessage", []() -> void
+		{
+			Command::Execute("openmenu quickmessage");
+		});
 
 		AddScriptFunctions();
 

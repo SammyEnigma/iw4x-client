@@ -1,4 +1,5 @@
 #include <STDInclude.hpp>
+#include "TextRenderer.hpp"
 
 namespace Game
 {
@@ -939,7 +940,7 @@ namespace Components
 		}
 
 		const auto materialNameLen = static_cast<uint8_t>(*text);
-		text++;
+		++text;
 
 		for (auto i = 0u; i < materialNameLen; i++)
 		{
@@ -953,8 +954,10 @@ namespace Components
 		text += materialNameLen;
 
 		auto* material = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_MATERIAL, materialName.data()).material;
-		if (material == nullptr || material->techniqueSet == nullptr || material->techniqueSet->name == nullptr || strcmp(material->techniqueSet->name, "2d") != 0)
+		if (material == nullptr || material->techniqueSet == nullptr || material->techniqueSet->name == nullptr || std::strcmp(material->techniqueSet->name, "2d") != 0)
+		{
 			material = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_MATERIAL, "default").material;
+		}
 
 		const auto yy = y - (h + yScale * static_cast<float>(font->pixelHeight)) * 0.5f;
 
@@ -1090,7 +1093,7 @@ namespace Components
 					if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
 						xa += xScale * padding;
 					++count;
-					maxLengthRemaining--;
+					--maxLengthRemaining;
 					continue;
 				}
 
@@ -1110,7 +1113,7 @@ namespace Components
 						if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
 							xa += xScale * padding;
 						count += (fontIconEnd - curText) + 1;
-						maxLengthRemaining--;
+						--maxLengthRemaining;
 						curText = fontIconEnd;
 						continue;
 					}
@@ -1221,8 +1224,8 @@ namespace Components
 				if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
 					xa += xScale * padding;
 
-				count++;
-				maxLengthRemaining--;
+				++count;
+				--maxLengthRemaining;
 			}
 
 			if (renderFlags & Game::TEXT_RENDERFLAG_CURSOR && count == cursorPos)
@@ -1239,10 +1242,14 @@ namespace Components
 		auto maxWidth = 0;
 
 		if (maxChars <= 0)
+		{
 			maxChars = std::numeric_limits<int>::max();
+		}
 
 		if (text == nullptr)
+		{
 			return 0;
+		}
 
 		auto count = 0;
 		while (text && *text && count < maxChars)
@@ -1258,7 +1265,7 @@ namespace Components
 				{
 					if (*text >= COLOR_FIRST_CHAR && *text <= COLOR_LAST_CHAR)
 					{
-						text++;
+						++text;
 						continue;
 					}
 
@@ -1308,7 +1315,8 @@ namespace Components
 				{
 					maxWidth = lineWidth;
 				}
-				count++;
+
+				++count;
 			}
 		}
 
@@ -1327,7 +1335,7 @@ namespace Components
 		if (!in || !out) return;
 
 		max--;
-		size_t current = 0;
+		std::size_t current = 0;
 		while (*in != 0 && current < max)
 		{
 			const char index = *(in + 1);
@@ -1344,6 +1352,7 @@ namespace Components
 
 			++in;
 		}
+
 		*out = '\0';
 	}
 
@@ -1351,7 +1360,7 @@ namespace Components
 	{
 		char buffer[1024]{}; // 1024 is a lucky number in the engine
 		StripColors(in.data(), buffer, sizeof(buffer));
-		return {buffer};
+		return std::string{ buffer };
 	}
 
 	void TextRenderer::StripMaterialTextIcons(const char* in, char* out, std::size_t max)
@@ -1398,6 +1407,7 @@ namespace Components
 			}
 
 		}
+
 		*out = '\0';
 	}
 
@@ -1405,7 +1415,7 @@ namespace Components
 	{
 		char buffer[1000]{}; // Should be more than enough
 		StripAllTextIcons(in.data(), buffer, sizeof(buffer));
-		return {buffer};
+		return std::string{ buffer };
 	}
 
 	void TextRenderer::StripAllTextIcons(const char* in, char* out, std::size_t max)
@@ -1413,7 +1423,7 @@ namespace Components
 		if (!in || !out) return;
 
 		--max;
-		size_t current = 0;
+		std::size_t current = 0;
 		while (*in != 0 && current < max)
 		{
 			if (*in == '^' && (in[1] == '\x01' || in[1] == '\x02'))
@@ -1421,18 +1431,25 @@ namespace Components
 				in += 2;
 
 				if (*in) // width
-					in++;
+				{
+					++in;
+				}
+
 				if (*in) // height
-					in++;
+				{
+					++in;
+				}
 
 				if (*in) // material name length + material name characters
 				{
 					const auto materialNameLength = *in;
-					in++;
+					++in;
 					for (auto i = 0; i < materialNameLength; i++)
 					{
 						if (*in)
-							in++;
+						{
+							++in;
+						}
 					}
 				}
 
@@ -1463,7 +1480,7 @@ namespace Components
 	{
 		char buffer[1000]{}; // Should be more than enough
 		StripAllTextIcons(in.data(), buffer, sizeof(buffer));
-		return {buffer};
+		return std::string{ buffer };
 	}
 
 	int TextRenderer::SEH_PrintStrlenWithCursor(const char* string, const Game::field_t* field)
@@ -1485,16 +1502,16 @@ namespace Components
 
 			if (c == '^' && *curText >= COLOR_FIRST_CHAR && *curText <= COLOR_LAST_CHAR && !(cursorPos > count && cursorPos < count + 2))
 			{
-				curText++;
-				count++;
+				++curText;
+				++count;
 			}
 			else if(c != '\r' && c != '\n')
 			{
-				len++;
+				++len;
 			}
 
-			count++;
-			lenWithInvisibleTail++;
+			++count;
+			++lenWithInvisibleTail;
 		}
 
 		return lenWithInvisibleTail;
@@ -1523,17 +1540,17 @@ namespace Components
 	{
 		Utils::Hook::Set<char>(0x535629, limit); // DrawText2d
 		Utils::Hook::Set<char>(0x4C1BE4, limit); // SEH_PrintStrlen
-		Utils::Hook::Set<char>(0x4863DD, limit); // No idea :P
-		Utils::Hook::Set<char>(0x486429, limit); // No idea :P
-		Utils::Hook::Set<char>(0x49A5A8, limit); // No idea :P
+		Utils::Hook::Set<char>(0x4863DD, limit); // No idea
+		Utils::Hook::Set<char>(0x486429, limit); // No idea
+		Utils::Hook::Set<char>(0x49A5A8, limit); // No idea
 		Utils::Hook::Set<char>(0x505721, limit); // R_TextWidth
-		Utils::Hook::Set<char>(0x505801, limit); // No idea :P
-		Utils::Hook::Set<char>(0x50597F, limit); // No idea :P
-		Utils::Hook::Set<char>(0x5815DB, limit); // No idea :P
-		Utils::Hook::Set<char>(0x592ED0, limit); // No idea :P
-		Utils::Hook::Set<char>(0x5A2E2E, limit); // No idea :P
+		Utils::Hook::Set<char>(0x505801, limit); // No idea
+		Utils::Hook::Set<char>(0x50597F, limit); // No idea
+		Utils::Hook::Set<char>(0x5815DB, limit); // No idea
+		Utils::Hook::Set<char>(0x592ED0, limit); // No idea
+		Utils::Hook::Set<char>(0x5A2E2E, limit); // No idea
 			
-		Utils::Hook::Set<char>(0x5A2733, static_cast<char>(ColorIndexForChar(limit))); // No idea :P
+		Utils::Hook::Set<char>(0x5A2733, static_cast<char>(ColorIndexForChar(limit))); // No idea
 	}
 
 	// Patches team overhead normally
@@ -1541,8 +1558,7 @@ namespace Components
 	{
 		if (r_colorBlind.get<bool>())
 		{
-			const auto str = std::string(name);
-			if (str == "g_TeamColor_EnemyTeam")
+			if (std::strcmp(name, "g_TeamColor_EnemyTeam") == 0)
 			{
 				// Dvar_GetUnpackedColor
 				const auto* colorblindEnemy = g_ColorBlind_EnemyTeam->current.color;
@@ -1553,7 +1569,7 @@ namespace Components
 				return false;
 			}
 
-			if (str == "g_TeamColor_MyTeam")
+			if (std::strcmp(name, "g_TeamColor_MyTeam") == 0)
 			{
 				// Dvar_GetUnpackedColor
 				const auto* colorblindAlly = g_ColorBlind_MyTeam->current.color;
@@ -1572,8 +1588,8 @@ namespace Components
 	{
 		__asm
 		{
-			push[esp + 8h]
-			push[esp + 8h]
+			push [esp + 8h]
+			push [esp + 8h]
 			call TextRenderer::Dvar_GetUnpackedColorByName
 			add esp, 8h
 
@@ -1653,7 +1669,7 @@ namespace Components
 			fontIconLookup.emplace(std::make_pair(entry.iconName, entry));
 		}
 
-		std::sort(fontIconList.begin(), fontIconList.end(), [](const FontIconTableEntry& a, const FontIconTableEntry& b)
+		std::ranges::sort(fontIconList, [](const FontIconTableEntry& a, const FontIconTableEntry& b) -> bool
 		{
 			return a.iconName < b.iconName;
 		});

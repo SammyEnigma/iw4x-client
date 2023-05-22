@@ -1,5 +1,6 @@
 #include <STDInclude.hpp>
 
+#include "ArenaLength.hpp"
 #include "FastFiles.hpp"
 #include "RawFiles.hpp"
 #include "StartupMessages.hpp"
@@ -11,6 +12,7 @@ namespace Components
 	std::string Maps::CurrentMainZone;
 	std::vector<std::pair<std::string, std::string>> Maps::DependencyList;
 	std::vector<std::string> Maps::CurrentDependencies;
+	std::vector<std::string> Maps::FoundCustomMaps;
 
 	Dvar::Var Maps::RListSModels;
 
@@ -91,9 +93,9 @@ namespace Components
 
 			Game::unzClose(this->searchPath.iwd->handle);
 
-			auto _free = Utils::Hook::Call<void(void*)>(0x6B5CF2);
-			_free(this->searchPath.iwd->buildBuffer);
-			_free(this->searchPath.iwd);
+			// Use game's free function
+			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd->buildBuffer);
+			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd);
 
 			ZeroMemory(&this->searchPath, sizeof this->searchPath);
 		}
@@ -105,8 +107,8 @@ namespace Components
 
 		if (Maps::UserMap.isValid())
 		{
-			const std::string mapname = Maps::UserMap.getName();
-			const auto* arena = Utils::String::VA("usermaps/%s/%s.arena", mapname.data(), mapname.data());
+			const auto mapname = Maps::UserMap.getName();
+			const auto arena = GetArenaPath(mapname);
 
 			if (Utils::IO::FileExists(arena))
 			{
@@ -183,17 +185,17 @@ namespace Components
 	void Maps::OverrideMapEnts(Game::MapEnts* ents)
 	{
 		auto callback = [] (Game::XAssetHeader header, void* ents)
-			{
-				Game::MapEnts* mapEnts = reinterpret_cast<Game::MapEnts*>(ents);
-				Game::clipMap_t* clipMap = header.clipMap;
+		{
+			Game::MapEnts* mapEnts = reinterpret_cast<Game::MapEnts*>(ents);
+			Game::clipMap_t* clipMap = header.clipMap;
 
-				if (clipMap && mapEnts && !_stricmp(mapEnts->name, clipMap->name))
-				{
-					clipMap->mapEnts = mapEnts;
-					//*Game::marMapEntsPtr = mapEnts;
-					//Game::G_SpawnEntitiesFromString();
-				}
-			};
+			if (clipMap && mapEnts && !_stricmp(mapEnts->name, clipMap->name))
+			{
+				clipMap->mapEnts = mapEnts;
+				//*Game::marMapEntsPtr = mapEnts;
+				//Game::G_SpawnEntitiesFromString();
+			}
+		};
 
 		// Internal doesn't lock the thread, as locking is impossible, due to executing this in the thread that holds the current lock
 		Game::DB_EnumXAssets_Internal(Game::XAssetType::ASSET_TYPE_CLIPMAP_MP, callback, ents, true);
@@ -314,13 +316,13 @@ namespace Components
 
 	void Maps::GetBSPName(char* buffer, size_t size, const char* format, const char* mapname)
 	{
-		if (!Utils::String::StartsWith(mapname, "mp_") && !Utils::String::StartsWith(mapname, "zm_"))
+		if (!Utils::String::StartsWith(mapname, "mp_"))
 		{
 			format = "maps/%s.d3dbsp";
 		}
 
-		// Redirect shipment to shipment long
-		if (mapname == "mp_shipment"s)
+		// TODO: Remove this hack by using CoD4 version of the map
+		if (std::strcmp(mapname, "mp_shipment") == 0)
 		{
 			mapname = "mp_shipment_long";
 		}
@@ -338,12 +340,33 @@ namespace Components
 		return (Utils::String::StartsWith(entity, "dyn_") || Utils::String::StartsWith(entity, "node_") || Utils::String::StartsWith(entity, "actor_"));
 	}
 
+	std::unordered_map<std::string, std::string> Maps::ParseCustomMapArena(const std::string& singleMapArena)
+	{
+		static const std::regex regex("  (\\w*) *\"?((?:\\w| )*)\"?");
+		std::unordered_map<std::string, std::string> arena;
+
+		std::smatch m;
+
+		std::string::const_iterator search_start(singleMapArena.cbegin());
+
+		while (std::regex_search(search_start, singleMapArena.cend(), m, regex))
+		{
+			if (m.size() > 2)
+			{
+				arena.emplace(m[1].str(), m[2].str());
+				search_start = m.suffix().first;
+			}
+		}
+
+		return arena;
+	}
+
 	Maps::MapDependencies Maps::GetDependenciesForMap(const std::string& map)
 	{
 		std::string teamAxis = "opforce_composite";
 		std::string teamAllies = "us_army";
 
-		Maps::MapDependencies dependencies{};
+		Maps::MapDependencies dependencies;
 
 		// True by default - cause some maps won't have an arenafile entry
 		dependencies.requiresTeamZones = true;
@@ -578,6 +601,46 @@ namespace Components
 		return Utils::IO::DirectoryExists(std::format("usermaps/{}", mapname)) && Utils::IO::FileExists(std::format("usermaps/{}/{}.ff", mapname, mapname));
 	}
 
+	void Maps::ScanCustomMaps()
+	{
+		FoundCustomMaps.clear();
+		Logger::Print("Looking for custom maps...\n");
+
+		std::filesystem::path basePath = (*Game::fs_basepath)->current.string;
+		basePath /= "usermaps";
+
+		if (!std::filesystem::exists(basePath))
+		{
+			return;
+		}
+
+		const auto entries = Utils::IO::ListFiles(basePath);
+
+		for (const auto& entry : entries)
+		{
+			if (entry.is_directory())
+			{
+				const auto zoneName = entry.path().filename().string();
+				const auto mapPath = std::format("{}\\{}.ff", entry.path().string(), zoneName);
+				if (Utils::IO::FileExists(mapPath))
+				{
+					FoundCustomMaps.push_back(zoneName);
+					Logger::Print("Discovered custom map {}\n", zoneName);
+				}
+			}
+		}
+	}
+
+	std::string Maps::GetArenaPath(const std::string& mapName)
+	{
+		return std::format("usermaps/{}/{}.arena", mapName, mapName);
+	}
+
+	const std::vector<std::string>& Maps::GetCustomMaps()
+	{
+		return FoundCustomMaps;
+	}
+
 	Game::XAssetEntry* Maps::GetAssetEntryPool()
 	{
 		return *reinterpret_cast<Game::XAssetEntry**>(0x48E6F4);
@@ -597,7 +660,7 @@ namespace Components
 					if (error)
 					{
 						Logger::Error(Game::ERR_DISCONNECT, "Missing DLC pack {} ({}) containing map {} ({}).\nPlease download it to play this map.",
-							pack.name, pack.index, Game::UI_LocalizeMapName(mapname.data()), mapname);
+							pack.name, pack.index, Localization::LocalizeMapName(mapname.data()), mapname);
 					}
 
 					return dlcIsTrue;
@@ -696,13 +759,9 @@ namespace Components
 
 			Maps::AddDlc({ 1, "Stimulus Pack", {"mp_complex", "mp_compact", "mp_storm", "mp_overgrown", "mp_crash"} });
 			Maps::AddDlc({ 2, "Resurgence Pack", {"mp_abandon", "mp_vacant", "mp_trailerpark", "mp_strike", "mp_fuel2"} });
-			Maps::AddDlc({ 3, "Nuketown", {"mp_nuked"} });
-			Maps::AddDlc({ 4, "Classics Pack #1", {"mp_cross_fire", "mp_cargoship", "mp_bloc"} });
-			Maps::AddDlc({ 5, "Classics Pack #2", {"mp_killhouse", "mp_bog_sh"} });
-			Maps::AddDlc({ 6, "Freighter", {"mp_cargoship_sh"} });
-			Maps::AddDlc({ 7, "Resurrection Pack", {"mp_shipment_long", "mp_rust_long", "mp_firingrange"} });
-			Maps::AddDlc({ 8, "Recycled Pack", {"mp_bloc_sh", "mp_crash_tropical", "mp_estate_tropical", "mp_fav_tropical", "mp_storm_spring"} });
-			Maps::AddDlc({ 9, "Classics Pack #3", {"mp_farm", "mp_backlot", "mp_pipeline", "mp_countdown", "mp_crash_snow", "mp_carentan", "mp_broadcast", "mp_showdown", "mp_convoy"} });
+			Maps::AddDlc({ 3, "IW4x Classics", {"mp_nuked", "mp_cross_fire", "mp_cargoship", "mp_bloc", "mp_killhouse", "mp_bog_sh", "mp_cargoship_sh", "mp_shipment", "mp_shipment_long", "mp_rust_long", "mp_firingrange", "mp_bloc_sh", "mp_crash_tropical", "mp_estate_tropical", "mp_fav_tropical", "mp_storm_spring"} });
+			Maps::AddDlc({ 4, "Call Of Duty 4 Pack", {"mp_farm", "mp_backlot", "mp_pipeline", "mp_countdown", "mp_crash_snow", "mp_carentan", "mp_broadcast", "mp_showdown", "mp_convoy", "mp_citystreets"} });
+			Maps::AddDlc({ 5, "Modern Warfare 3 Pack", {"mp_dome", "mp_hardhat", "mp_paris", "mp_seatown", "mp_bravo", "mp_underground", "mp_plaza2", "mp_village", "mp_alpha"}});
 
 			Maps::UpdateDlcStatus();
 
@@ -754,18 +813,6 @@ namespace Components
 		Utils::Hook::Set<DWORD>(0x64A029, 0x1C200000); // 450 MiB
 		Utils::Hook::Set<DWORD>(0x64A057, 0x1C200000);
 
-#if DEBUG
-		// Hunk debugging
-		Utils::Hook::Set<BYTE>(0x4FF57B, 0xCC);
-		Utils::Hook::Nop(0x4FF57C, 4);
-#else
-		// Temporarily disable distortion warnings
-		Utils::Hook::Nop(0x50DBFF, 5);
-		Utils::Hook::Nop(0x50DC4F, 5);
-		Utils::Hook::Nop(0x50DCA3, 5);
-		Utils::Hook::Nop(0x50DCFE, 5);
-#endif
-
 		// Intercept BSP name resolving
 		Utils::Hook(0x4C5979, Maps::GetBSPName, HOOK_CALL).install()->quick();
 
@@ -791,7 +838,7 @@ namespace Components
 		Utils::Hook(0x5A9D51, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
 		Utils::Hook(0x5B34DD, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
 
-		Command::Add("delayReconnect", []([[maybe_unused]] Command::Params* params)
+		Command::Add("delayReconnect", []()
 		{
 			Scheduler::Once([]
 			{
@@ -805,7 +852,7 @@ namespace Components
 			Utils::Hook(0x4A7251, Maps::LoadNewMapCommand, HOOK_CALL).install()->quick();
 		}
 
-		// Download the map before a maprotation if necessary
+		// Download the map before a map rotation if necessary
 		// Conflicts with Theater's SV map rotation check, but this one is safer!
 		Utils::Hook(0x5AA91C, Maps::RotateCheckStub, HOOK_CALL).install()->quick();
 

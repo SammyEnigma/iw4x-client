@@ -3,6 +3,7 @@
 
 #include "CardTitles.hpp"
 #include "ClanTags.hpp"
+#include "Events.hpp"
 #include "Party.hpp"
 #include "ServerCommands.hpp"
 
@@ -13,6 +14,8 @@ namespace Components
 	Dvar::Var Dedicated::SVLanOnly;
 	Dvar::Var Dedicated::SVMOTD;
 	Dvar::Var Dedicated::COMLogFilter;
+
+	const Game::dvar_t* Dedicated::com_dedicated;
 
 	bool Dedicated::IsEnabled()
 	{
@@ -170,7 +173,7 @@ namespace Components
 
 		Network::Address master(Utils::String::VA("%s:%u", masterServerName, masterPort));
 
-		Logger::Print(Game::CON_CHANNEL_SERVER, "Sending heartbeat to master: {}:{}\n", masterServerName, masterPort);
+		Logger::Print("Sending heartbeat to master: {}:{}\n", masterServerName, masterPort);
 		Network::SendCommand(master, "heartbeat", "IW4");
 	}
 
@@ -183,8 +186,6 @@ namespace Components
 		{
 			// Make sure all callbacks are handled
 			Scheduler::Loop(Steam::SteamAPI_RunCallbacks, Scheduler::Pipeline::SERVER);
-
-			SVLanOnly = Dvar::Register<bool>("sv_lanOnly", false, Game::DVAR_NONE, "Don't act as node");
 
 			Utils::Hook(0x60BE98, InitDedicatedServer, HOOK_CALL).install()->quick();
 
@@ -249,6 +250,25 @@ namespace Components
 				Events::OnDvarInit([]
 				{
 					SVMOTD = Dvar::Register<const char*>("sv_motd", "", Game::DVAR_NONE, "A custom message of the day for servers");
+					SVLanOnly = Dvar::Register<bool>("sv_lanOnly", false, Game::DVAR_NONE, "Don't act as node");
+
+					static const char* g_dedicatedEnumNames[] =
+					{
+						"listen server",
+						"dedicated LAN server",
+						"dedicated internet server",
+						nullptr,
+					};
+
+					// IW5MP Dedicated Server adds another flag. That flag should not exist on this version of IW4
+					com_dedicated = Game::Dvar_RegisterEnum("dedicated", g_dedicatedEnumNames, 2, Game::DVAR_ROM, "True if this is a dedicated server");
+					// Dedicated only behaviour from IW5MP Dedicated Server.
+					if (com_dedicated->current.integer != 1 && com_dedicated->current.integer != 2)
+					{
+						Game::DvarValue value;
+						value.integer = 0;
+						Game::Dvar_SetVariant(const_cast<Game::dvar_t*>(com_dedicated), value, Game::DVAR_SOURCE_INTERNAL);
+					}
 				});
 
 				// Post initialization point
@@ -271,14 +291,10 @@ namespace Components
 		}
 		else
 		{
-			for (int i = 0; i < ARRAYSIZE(PlayerGuids); ++i)
-			{
-				PlayerGuids[i][0].bits = 0;
-				PlayerGuids[i][1].bits = 0;
-			}
+			ZeroMemory(PlayerGuids, sizeof(PlayerGuids));
 
 			// Intercept server commands
-			ServerCommands::OnCommand(20, [](Command::Params* params)
+			ServerCommands::OnCommand(20, [](const Command::Params* params)
 			{
 				for (int client = 0; client < 18; client++)
 				{

@@ -18,12 +18,14 @@ namespace Utils
 
 		std::string Rand::GenerateChallenge()
 		{
-			std::string challenge;
-			challenge.append(String::VA("%X", GenerateInt()));
-			challenge.append(String::VA("%X", ~timeGetTime() ^ GenerateInt()));
-			challenge.append(String::VA("%X", GenerateInt()));
+			char buffer[512]{};
+			int pos = 0;
 
-			return challenge;
+			pos += sprintf_s(&buffer[pos], sizeof(buffer) - pos, "%X", GenerateInt());
+			pos += sprintf_s(&buffer[pos], sizeof(buffer) - pos, "%X", ~timeGetTime() ^ GenerateInt());
+			pos += sprintf_s(&buffer[pos], sizeof(buffer) - pos, "%X", GenerateInt());
+
+			return std::string{ buffer, static_cast<std::size_t>(pos) };
 		}
 
 		std::uint32_t Rand::GenerateInt()
@@ -60,13 +62,13 @@ namespace Utils
 			if (!key.isValid()) return {};
 
 			std::uint8_t buffer[512];
-			DWORD length = sizeof(buffer);
+			unsigned long length = sizeof(buffer);
 
 			ltc_mp = ltm_desc;
 			register_prng(&sprng_desc);
 			ecc_sign_hash(reinterpret_cast<const std::uint8_t*>(message.data()), message.size(), buffer, &length, nullptr, find_prng("sprng"), key.getKeyPtr());
 
-			return {reinterpret_cast<char*>(buffer), length};
+			return  std::string{ reinterpret_cast<char*>(buffer), length };
 		}
 
 		bool ECC::VerifyMessage(Key key, const std::string& message, const std::string& signature)
@@ -76,7 +78,9 @@ namespace Utils
 			ltc_mp = ltm_desc;
 
 			int result = 0;
-			return (ecc_verify_hash(reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(), reinterpret_cast<const std::uint8_t*>(message.data()), message.size(), &result, key.getKeyPtr()) == CRYPT_OK && result != 0);
+			return (ecc_verify_hash(reinterpret_cast<const std::uint8_t*>(signature.data()), signature.size(),
+			                        reinterpret_cast<const std::uint8_t*>(message.data()), message.size(),
+			                        &result, key.getKeyPtr()) == CRYPT_OK && result != 0);
 		}
 
 #pragma endregion
@@ -102,7 +106,7 @@ namespace Utils
 			if (!key.isValid()) return {};
 
 			std::uint8_t buffer[512];
-			DWORD length = sizeof(buffer);
+			unsigned long length = sizeof(buffer);
 
 			register_prng(&sprng_desc);
 			register_hash(&sha1_desc);
@@ -111,7 +115,7 @@ namespace Utils
 
 			rsa_sign_hash(reinterpret_cast<const std::uint8_t*>(message.data()), message.size(), buffer, &length, NULL, find_prng("sprng"), find_hash("sha1"), 0, key.getKeyPtr());
 
-			return {reinterpret_cast<char*>(buffer), length};
+			return  std::string{ reinterpret_cast<char*>(buffer), length };
 		}
 
 		bool RSA::VerifyMessage(Key key, const std::string& message, const std::string& signature)
@@ -183,10 +187,10 @@ namespace Utils
 			tiger_process(&state, data, length);
 			tiger_done(&state, buffer);
 
-			std::string hash(reinterpret_cast<char*>(buffer), sizeof(buffer));
+			std::string hash{ reinterpret_cast<char*>(buffer), sizeof(buffer) };
 			if (!hex) return hash;
 
-			return String::DumpHex(hash, "");
+			return String::DumpHex(hash, {});
 		}
 
 #pragma endregion
@@ -207,10 +211,10 @@ namespace Utils
 			sha1_process(&state, data, length);
 			sha1_done(&state, buffer);
 
-			std::string hash(reinterpret_cast<char*>(buffer), sizeof(buffer));
+			std::string hash{ reinterpret_cast<char*>(buffer), sizeof(buffer) };
 			if (!hex) return hash;
 
-			return String::DumpHex(hash, "");
+			return String::DumpHex(hash, {});
 		}
 
 #pragma endregion
@@ -231,10 +235,10 @@ namespace Utils
 			sha256_process(&state, data, length);
 			sha256_done(&state, buffer);
 
-			std::string hash(reinterpret_cast<char*>(buffer), sizeof(buffer));
+			std::string hash{ reinterpret_cast<char*>(buffer), sizeof(buffer) };
 			if (!hex) return hash;
 
-			return String::DumpHex(hash, "");
+			return String::DumpHex(hash, {});
 		}
 
 #pragma endregion
@@ -255,10 +259,10 @@ namespace Utils
 			sha512_process(&state, data, length);
 			sha512_done(&state, buffer);
 
-			std::string hash(reinterpret_cast<char*>(buffer), sizeof(buffer));
+			std::string hash{ reinterpret_cast<char*>(buffer), sizeof(buffer) };
 			if (!hex) return hash;
 
-			return String::DumpHex(hash, "");
+			return String::DumpHex(hash, {});
 		}
 
 #pragma endregion
@@ -270,7 +274,7 @@ namespace Utils
 			return Compute(data.data(), data.size());
 		}
 
-		unsigned int JenkinsOneAtATime::Compute(const char *key, std::size_t len)
+		unsigned int JenkinsOneAtATime::Compute(const char* key, std::size_t len)
 		{
 			unsigned int hash, i;
 			for (hash = i = 0; i < len; ++i)

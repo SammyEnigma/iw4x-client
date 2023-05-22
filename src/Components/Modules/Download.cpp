@@ -3,11 +3,14 @@
 #include <Utils/WebIO.hpp>
 
 #include "Download.hpp"
+#include "Events.hpp"
 #include "MapRotation.hpp"
 #include "Party.hpp"
 #include "ServerInfo.hpp"
 
 #include <mongoose.h>
+
+#define MG_OVERRIDE_LOG_FN
 
 namespace Components
 {
@@ -25,6 +28,8 @@ namespace Components
 	std::thread Download::ServerThread;
 	volatile bool Download::Terminate;
 	bool Download::ServerRunning;
+
+	std::string Download::MongooseLogBuffer;
 
 #pragma region Client
 
@@ -84,7 +89,7 @@ namespace Components
 		}
 		catch (const nlohmann::json::parse_error& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 			return false;
 		}
 
@@ -119,7 +124,7 @@ namespace Components
 			}
 			catch (const nlohmann::json::exception& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Error: {}\n", ex.what());
+				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Error: {}\n", ex.what());
 				return false;
 			}
 		}
@@ -223,7 +228,7 @@ namespace Components
 			DownloadProgress(&fDownload, bytes - fDownload.receivedBytes);
 		});
 
-		bool result = false;
+		auto result = false;
 		fDownload.buffer = webIO.get(url, &result);
 		if (!result) fDownload.buffer.clear();
 
@@ -416,6 +421,19 @@ namespace Components
 
 #pragma region Server
 
+	void Download::LogFn(char c, [[maybe_unused]] void* param)
+	{
+		// Truncate & print if buffer is 1024 characters in length or otherwise only print when we reached a 'new line'
+		if (!std::isprint(static_cast<unsigned char>(c)) || MongooseLogBuffer.size() == 1024)
+		{
+			Logger::Print(Game::CON_CHANNEL_NETWORK, "{}\n", MongooseLogBuffer);
+			MongooseLogBuffer.clear();
+			return;
+		}
+
+		MongooseLogBuffer.push_back(c);
+	}
+
 	static std::string InfoHandler()
 	{
 		const auto status = ServerInfo::GetInfo();
@@ -425,6 +443,7 @@ namespace Components
 		info["status"] = status.to_json();
 		info["host"] = host.to_json();
 		info["map_rotation"] = MapRotation::to_json();
+		info["dedicated"] = Dedicated::com_dedicated->current.integer;
 
 		std::vector<nlohmann::json> players;
 
@@ -432,23 +451,27 @@ namespace Components
 		for (auto i = 0; i < Game::MAX_CLIENTS; ++i)
 		{
 			std::unordered_map<std::string, nlohmann::json> playerInfo;
+			// Insert default values
 			playerInfo["score"] = 0;
 			playerInfo["ping"] = 0;
-			playerInfo["name"] = "";
+			playerInfo["name"] = "Unknown Soldier";
+			playerInfo["test_client"] = 0;
 
 			if (Dedicated::IsRunning())
 			{
-				if (Game::svs_clients[i].header.state < Game::CS_CONNECTED) continue;
+				if (Game::svs_clients[i].header.state < Game::CS_ACTIVE) continue;
+				if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client) continue;
 
 				playerInfo["score"] = Game::SV_GameClientNum_Score(i);
 				playerInfo["ping"] = Game::svs_clients[i].ping;
 				playerInfo["name"] = Game::svs_clients[i].name;
+				playerInfo["test_client"] = Game::svs_clients[i].bIsTestClient;
 			}
 			else
 			{
 				// Score and ping are irrelevant
 				const auto* name = Game::PartyHost_GetMemberName(Game::g_lobbyData, i);
-				if (name == nullptr || *name == '\0') continue;
+				if (!name || !*name) continue;
 
 				playerInfo["name"] = name;
 			}
@@ -457,7 +480,7 @@ namespace Components
 		}
 
 		info["players"] = players;
-		return {nlohmann::json(info).dump()};
+		return nlohmann::json(info).dump();
 	}
 
 	static std::string ListHandler()
@@ -503,7 +526,7 @@ namespace Components
 			jsonList = fileList;
 		}
 
-		return {jsonList.dump()};
+		return jsonList.dump();
 	}
 
 	static std::string MapHandler()
@@ -547,7 +570,7 @@ namespace Components
 			jsonList = fileList;
 		}
 
-		return {jsonList.dump()};
+		return jsonList.dump();
 	}
 
 	static void FileHandler(mg_connection* c, const mg_http_message* hm)
@@ -663,9 +686,19 @@ namespace Components
 		{
 			if (!Flags::HasFlag("disable-mongoose"))
 			{
+#ifdef _DEBUG
+				mg_log_set(MG_LL_INFO);
+#else
+				mg_log_set(MG_LL_ERROR);
+#endif
+
+#ifdef MG_OVERRIDE_LOG_FN
+				mg_log_set_fn(LogFn, nullptr);
+#endif
+
 				mg_mgr_init(&Mgr);
 
-				Network::OnStart([]
+				Events::OnNetworkInit([]() -> void
 				{
 					const auto* nc = mg_http_listen(&Mgr, Utils::String::VA(":%hu", Network::GetPort()), &EventHandler, &Mgr);
 					if (!nc)
@@ -677,7 +710,7 @@ namespace Components
 
 				ServerRunning = true;
 				Terminate = false;
-				ServerThread = Utils::Thread::CreateNamedThread("Mongoose", []
+				ServerThread = Utils::Thread::CreateNamedThread("Mongoose", []() -> void
 				{
 					Com_InitThreadData();
 
@@ -690,7 +723,7 @@ namespace Components
 		}
 		else
 		{
-			Events::OnDvarInit([]
+			Events::OnDvarInit([]() -> void
 			{
 				UIDlTimeLeft = Dvar::Register<const char*>("ui_dl_timeLeft", "", Game::DVAR_NONE, "");
 				UIDlProgress = Dvar::Register<const char*>("ui_dl_progress", "", Game::DVAR_NONE, "");

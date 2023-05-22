@@ -2,6 +2,8 @@
 #include <Utils/Compression.hpp>
 
 #include "QuickPatch.hpp"
+#include "TextRenderer.hpp"
+#include "Toast.hpp"
 
 namespace Components
 {
@@ -196,10 +198,14 @@ namespace Components
 	void QuickPatch::CL_KeyEvent_OnEscape()
 	{
 		if (Game::Con_CancelAutoComplete())
+		{
 			return;
+		}
 
 		if (TextRenderer::HandleFontIconAutocompleteKey(0, TextRenderer::FONT_ICON_ACI_CONSOLE, Game::K_ESCAPE))
+		{
 			return;
+		}
 
 		// Close console
 		Game::Key_RemoveCatcher(0, ~Game::KEYCATCH_CONSOLE);
@@ -363,31 +369,6 @@ namespace Components
 		// remove limit on IWD file loading
 		Utils::Hook::Set<BYTE>(0x642BF3, 0xEB);
 
-		// dont run UPNP stuff on main thread
-		Utils::Hook::Set<BYTE>(0x48A135, 0xC3);
-		Utils::Hook::Set<BYTE>(0x48A151, 0xC3);
-		Utils::Hook::Nop(0x684080, 5); // Don't spam the console
-
-		// spawn upnp thread when UPNP_init returns
-		Utils::Hook::Hook(0x47982B, []()
-		{
-			std::thread([]
-			{
-				Com_InitThreadData();
-
-				// check natpmpstate
-				// state 4 is no more devices to query
-				while (Utils::Hook::Get<int>(0x66CE200) < 4)
-				{
-					Utils::Hook::Call<void()>(0x4D7030)();
-					Game::Sys_Sleep(500);
-				}
-			}).detach();
-		}, HOOK_JUMP).install()->quick();
-
-		// disable the IWNet IP detection (default 'got ipdetect' flag to 1)
-		Utils::Hook::Set<BYTE>(0x649D6F0, 1);
-
 		// Fix stats sleeping
 		Utils::Hook::Set<BYTE>(0x6832BA, 0xEB);
 		Utils::Hook::Set<BYTE>(0x4BD190, 0xC3);
@@ -516,7 +497,7 @@ namespace Components
 
 		Command::Add("unlockstats", QuickPatch::UnlockStats);
 
-		Command::Add("dumptechsets", [](Command::Params* param)
+		Command::Add("dumptechsets", [](const Command::Params* param)
 		{
 			if (param->size() != 2)
 			{
@@ -527,18 +508,21 @@ namespace Components
 			std::vector<std::string> fastFiles;
 			if (std::strcmp(param->get(1), "all") == 0)
 			{
-				for (const auto& f : Utils::IO::ListFiles("zone/english", false))
+				for (const auto& entry : Utils::IO::ListFiles("zone/english", false))
 				{
+					const auto& f = entry.path().string();
 					fastFiles.emplace_back(f.substr(7, f.length() - 10));
 				}
 
-				for (const auto& f : Utils::IO::ListFiles("zone/dlc", false))
+				for (const auto& entry : Utils::IO::ListFiles("zone/dlc", false))
 				{
+					const auto& f = entry.path().string();
 					fastFiles.emplace_back(f.substr(3, f.length() - 6));
 				}
 
-				for (const auto& f : Utils::IO::ListFiles("zone/patch", false))
+				for (const auto& entry : Utils::IO::ListFiles("zone/patch", false))
 				{
+					const auto& f = entry.path().string();
 					fastFiles.emplace_back(f.substr(5, f.length() - 8));
 				}
 			}
@@ -597,18 +581,18 @@ namespace Components
 
 					for (int i = 0; i < ARRAYSIZE(Game::MaterialTechniqueSet::techniques); ++i)
 					{
-						Game::MaterialTechnique* technique = asset.techniqueSet->techniques[i];
+						auto* technique = asset.techniqueSet->techniques[i];
 
 						if (technique)
 						{
 							// Size-check is obsolete, as the structure is dynamic
 							buffer.align(Utils::Stream::ALIGN_4);
 
-							Game::MaterialTechnique* destTechnique = buffer.dest<Game::MaterialTechnique>();
+							auto* destTechnique = buffer.dest<Game::MaterialTechnique>();
 							buffer.save(technique, 8);
 
 							// Save_MaterialPassArray
-							Game::MaterialPass* destPasses = buffer.dest<Game::MaterialPass>();
+							auto* destPasses = buffer.dest<Game::MaterialPass>();
 							buffer.saveArray(technique->passArray, technique->passCount);
 
 							for (std::uint16_t j = 0; j < technique->passCount; ++j)

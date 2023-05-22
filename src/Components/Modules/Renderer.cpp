@@ -1,5 +1,7 @@
 #include <STDInclude.hpp>
 
+#include "Events.hpp"
+
 namespace Components
 {
 	Utils::Signal<Renderer::BackendCallback> Renderer::BackendFrameSignal;
@@ -16,6 +18,8 @@ namespace Components
 	Dvar::Var Renderer::r_drawAABBTrees;
 	Dvar::Var Renderer::r_playerDrawDebugDistance;
 	Dvar::Var Renderer::r_forceTechnique;
+	Dvar::Var Renderer::r_listSamplers;
+	Dvar::Var Renderer::r_drawLights;
 
 	float cyan[4] = { 0.0f, 0.5f, 0.5f, 1.0f };
 	float red[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
@@ -178,41 +182,13 @@ namespace Components
 		return Utils::Hook::Call<int(int, float, float, const char*, Game::vec4_t*, int)>(0x005033E0)(a1, a2, a3, Utils::String::VA("%s (^3%s^7)", mat->info.name, mat->techniqueSet->name), color, a6);
 	}
 
-	void ListSamplers()
-	{
-		static auto* source = reinterpret_cast<Game::GfxCmdBufSourceState*>(0x6CAF080);
-
-		Game::Font_s* font = Game::R_RegisterFont("fonts/smallFont", 0);
-		auto height = Game::R_TextHeight(font);
-		auto scale = 1.0f;
-		float color[4] = {0.0f, 1.0f, 0.0f, 1.0f};
-
-		for (std::size_t i = 0; i < 27; ++i)
-		{
-			if (source->input.codeImages[i] == nullptr)
-			{
-				color[0] = 1.f;
-			}
-			else
-			{
-				color[0] = 0.f;
-			}
-
-			std::stringstream str;
-			str << std::format("{}/{:#X} => ", i, i) << (source->input.codeImages[i] == nullptr ? "---" : source->input.codeImages[i]->name) << " " << std::to_string(source->input.codeImageSamplerStates[i]);
-			Game::R_AddCmdDrawText(str.str().data(), std::numeric_limits<int>::max(), font, 15.0f, (height * scale + 1) * (i + 1) + 14.0f, scale, scale, 0.0f, color, Game::ITEM_TEXTSTYLE_NORMAL);
-		}
-	}
-
 	void Renderer::DebugDrawTriggers()
 	{
 		if (!r_drawTriggers.get<bool>()) return;
 
-		auto entities = Game::g_entities;
-
 		for (std::size_t i = 0; i < Game::MAX_GENTITIES; ++i)
 		{
-			auto* ent = &entities[i];
+			auto* ent = &Game::g_entities[i];
 
 			if (ent->r.isInUse)
 			{
@@ -289,7 +265,7 @@ namespace Components
 		if (!val) return;
 
 		auto clientNum = Game::CG_GetClientNum();
-		Game::gentity_t* clientEntity = &Game::g_entities[clientNum];
+		auto* clientEntity = &Game::g_entities[clientNum];
 
 		// Ingame only & player only
 		if (!Game::CL_IsCgameInitialized() || clientEntity->client == nullptr)
@@ -383,7 +359,7 @@ namespace Components
 		if (!val) return;
 
 		auto clientNum = Game::CG_GetClientNum();
-		Game::gentity_t* clientEntity = &Game::g_entities[clientNum];
+		auto* clientEntity = &Game::g_entities[clientNum];
 
 		// Ingame only & player only
 		if (!Game::CL_IsCgameInitialized() || clientEntity->client == nullptr)
@@ -529,6 +505,116 @@ namespace Components
 		}
 	}
 
+	void Renderer::ListSamplers()
+	{
+		if (!r_listSamplers.get<bool>())
+		{
+			return;
+		}
+
+		static auto* source = reinterpret_cast<Game::GfxCmdBufSourceState*>(0x6CAF080);
+
+		auto* font = Game::R_RegisterFont("fonts/smallFont", 0);
+		auto height = Game::R_TextHeight(font);
+		auto scale = 1.0f;
+		float color[] = {0.0f, 1.0f, 0.0f, 1.0f};
+
+		for (std::size_t i = 0; i < 27; ++i)
+		{
+			if (source->input.codeImages[i] == nullptr)
+			{
+				color[0] = 1.f;
+			}
+			else
+			{
+				color[0] = 0.f;
+			}
+
+			const auto* str = Utils::String::Format("{}/{:#X} => {} {}", i, i,
+				(source->input.codeImages[i] == nullptr ? "---" : source->input.codeImages[i]->name),
+				std::to_string(source->input.codeImageSamplerStates[i])
+			);
+
+			Game::R_AddCmdDrawText(str, std::numeric_limits<int>::max(), font, 15.0f, (height * scale + 1) * (i + 1) + 14.0f, scale, scale, 0.0f, color, Game::ITEM_TEXTSTYLE_NORMAL);
+		}
+	}
+
+	void Renderer::DrawPrimaryLights()
+	{
+		if (!r_drawLights.get<bool>())
+		{
+			return;
+		}
+
+		auto clientNum = Game::CG_GetClientNum();
+		auto* clientEntity = &Game::g_entities[clientNum];
+
+		// Ingame only & player only
+		if (!Game::CL_IsCgameInitialized() || clientEntity->client == nullptr)
+		{
+			return;
+		}
+
+		auto scene = Game::scene;
+		auto asset = Game::DB_FindXAssetEntry(Game::XAssetType::ASSET_TYPE_COMWORLD, Utils::String::VA("maps/mp/%s.d3dbsp", (*Game::sv_mapname)->current.string));
+
+		if (asset == nullptr)
+		{
+			return;
+		}
+
+		auto world = asset->asset.header.comWorld;
+
+		for (size_t i = 0; i < world->primaryLightCount; i++)
+		{
+			auto light = &world->primaryLights[i];
+
+			float to[3];
+			to[0] = light->origin[0] + light->dir[0] * 10;
+			to[1] = light->origin[1] + light->dir[1] * 10;
+			to[2] = light->origin[2] + light->dir[2] * 10;
+
+			auto n = light->defName == nullptr ? "NONE" : light->defName;
+
+			auto str = std::format("LIGHT #{} ({})", i, n);
+
+			float color[4]{};
+			color[3] = 1.0f;
+			color[0] = light->color[0];
+			color[1] = light->color[1];
+			color[2] = light->color[2];
+
+
+			Game::R_AddDebugLine(color, light->origin, to);
+			Game::R_AddDebugString(color, light->origin, 1.0f, str.data());
+		}
+
+		if (scene)
+		{
+			for (size_t i = 0; i < scene->addedLightCount; i++)
+			{
+				auto light = &scene->addedLight[i];
+
+				float color[4]{};
+				color[3] = 1.0f;
+				color[0] = light->color[0];
+				color[1] = light->color[1];
+				color[2] = light->color[2];
+
+				float to[3];
+				to[0] = light->origin[0] + light->dir[0] * 10;
+				to[1] = light->origin[1] + light->dir[1] * 10;
+				to[2] = light->origin[2] + light->dir[2] * 10;
+
+				auto str = std::format("ADDED LIGHT #{}", i);
+
+				Game::R_AddDebugLine(color, light->origin, to);
+				Game::R_AddDebugString(color, light->origin, 1.0f, str.data());
+				
+			}
+		}
+	}
+
 	int Renderer::FixSunShadowPartitionSize(Game::GfxCamera* camera, Game::GfxSunShadowMapMetrics* mapMetrics, Game::GfxSunShadow* sunShadow, Game::GfxSunShadowClip* clip, float* partitionFraction)
 	{
 		auto result = Utils::Hook::Call<int(Game::GfxCamera*, Game::GfxSunShadowMapMetrics*, Game::GfxSunShadow*, Game::GfxSunShadowClip*, float*)>(0x5463B0)(camera, mapMetrics, sunShadow, clip, partitionFraction);
@@ -557,8 +643,15 @@ namespace Components
 				DebugDrawSceneModelCollisions();
 				DebugDrawTriggers();
 				ForceTechnique();
+				ListSamplers();
+				DrawPrimaryLights();
 			}
 		}, Scheduler::Pipeline::RENDERER);
+
+#ifdef _DEBUG
+		// Disable ATI Radeon 4000 optimization that crashes Pixwin
+		Utils::Hook::Set(0x5066F8, D3DFMT_UNKNOWN);
+#endif
 
 		// COD4 Map Fixes
 		// The day map porting is perfect we should be able to remove these
@@ -613,6 +706,8 @@ namespace Components
 			Renderer::r_drawAABBTrees = Game::Dvar_RegisterBool("r_drawAabbTrees", false, Game::DVAR_CHEAT, "Draw aabb trees");
 			Renderer::r_playerDrawDebugDistance = Game::Dvar_RegisterInt("r_drawDebugDistance", 1000, 0, 50000, Game::DVAR_ARCHIVE, "r_draw debug functions draw distance relative to the player");
 			Renderer::r_forceTechnique = Game::Dvar_RegisterInt("r_forceTechnique", 0, 0, 14, Game::DVAR_NONE, "Force a base technique on the renderer");
+			Renderer::r_listSamplers = Game::Dvar_RegisterBool("r_listSamplers", false, Game::DVAR_NONE, "List samplers & sampler states");
+			Renderer::r_drawLights = Game::Dvar_RegisterBool("r_drawLights", false, Game::DVAR_NONE, "Draw every comworld light in the level");
 		});
 	}
 

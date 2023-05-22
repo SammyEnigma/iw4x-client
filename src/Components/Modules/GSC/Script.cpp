@@ -1,13 +1,10 @@
 #include <STDInclude.hpp>
 #include "Script.hpp"
 
-namespace Components
+namespace Components::GSC
 {
 	std::vector<Script::ScriptFunction> Script::CustomScrFunctions;
 	std::vector<Script::ScriptMethod> Script::CustomScrMethods;
-
-	std::unordered_map<const char*, const char*> Script::ReplacedFunctions;
-	const char* Script::ReplacedPos = nullptr;
 
 	std::unordered_map<std::string, int> Script::ScriptMainHandles;
 	std::unordered_map<std::string, int> Script::ScriptInitHandles;
@@ -38,31 +35,34 @@ namespace Components
 		Game::Scr_StartupGameType();
 	}
 
-	// Do not use C++ objects because Scr_LoadScript may longjmp
-	void Script::GScr_LoadGameTypeScript_Stub()
+	void Script::LoadCustomScriptsFromFolder(const char* dir)
 	{
-		// Clear handles (from previous GSC loading session)
-		ScriptMainHandles.clear();
-		ScriptInitHandles.clear();
+		char path[MAX_OSPATH]{};
+		char searchPath[MAX_OSPATH]{};
 
-		char path[MAX_PATH]{};
+		strncpy_s(searchPath, dir, _TRUNCATE);
+		strncat_s(searchPath, "/", _TRUNCATE);
 
 		auto numFiles = 0;
-		const auto** files = Game::FS_ListFiles("scripts/", "gsc", Game::FS_LIST_ALL, &numFiles, 10);
+		const auto** files = Game::FS_ListFiles(searchPath, "gsc", Game::FS_LIST_ALL, &numFiles, 10);
 
 		for (auto i = 0; i < numFiles; ++i)
 		{
 			const auto* scriptFile = files[i];
 			Logger::Print("Loading script {}...\n", scriptFile);
 
-			sprintf_s(path, "%s/%s", "scripts", scriptFile);
+			const auto len = sprintf_s(path, "%s/%s", dir, scriptFile);
+			if (len == -1)
+			{
+				continue;
+			}
 
 			// Scr_LoadScriptInternal will add the '.gsc' suffix so we remove it
-			path[std::strlen(path) - 4] = '\0';
+			path[len - 4] = '\0';
 
 			if (!Game::Scr_LoadScript(path))
 			{
-				Logger::Print("Script {} encountered an error while loading. (doesn't exist?)", path);
+				Logger::Print("Script {} encountered an error while loading. A compilation error is the most likely cause\n", path);
 				continue;
 			}
 
@@ -71,12 +71,14 @@ namespace Components
 			const auto initHandle = Game::Scr_GetFunctionHandle(path, "init");
 			if (initHandle != 0)
 			{
+				Logger::Debug("Loaded '{}::init'", path);
 				ScriptInitHandles.insert_or_assign(path, initHandle);
 			}
 
 			const auto mainHandle = Game::Scr_GetFunctionHandle(path, "main");
 			if (mainHandle != 0)
 			{
+				Logger::Debug("Loaded '{}::main'", path);
 				ScriptMainHandles.insert_or_assign(path, mainHandle);
 			}
 
@@ -84,6 +86,34 @@ namespace Components
 		}
 
 		Game::FS_FreeFileList(files, 10);
+	}
+
+	void Script::LoadCustomScripts()
+	{
+		LoadCustomScriptsFromFolder("scripts");
+
+		// Game specific
+		const auto* gameDir = "scripts/mp";
+		LoadCustomScriptsFromFolder(gameDir);
+
+		// Map specific
+		const auto* mapDir = Utils::String::Format("scripts/mp/{}", (*Game::sv_mapname)->current.string);
+		LoadCustomScriptsFromFolder(mapDir);
+
+		// Mode specific
+		const auto* modeDir = Utils::String::Format("scripts/mp/{}", (*Game::g_gametype)->current.string);
+		LoadCustomScriptsFromFolder(modeDir);
+	}
+
+	// Do not use C++ objects because Scr_LoadScript may longjmp and crash or leak memory
+	void Script::GScr_LoadGameTypeScript_Stub()
+	{
+		// Clear handles (from previous GSC loading session)
+		ScriptMainHandles.clear();
+		ScriptInitHandles.clear();
+
+		LoadCustomScripts();
+
 		Game::GScr_LoadGameTypeScript();
 	}
 
@@ -136,12 +166,12 @@ namespace Components
 		if (pName != nullptr)
 		{
 			const auto name = Utils::String::ToLower(*pName);
-			for (const auto& func : CustomScrFunctions)
+			for (const auto& funcs : CustomScrFunctions)
 			{
-				if (Utils::Contains(&func.aliases, name))
+				if (std::ranges::find(funcs.aliases, name) != funcs.aliases.end())
 				{
-					*type = func.type;
-					return func.actionFunc;
+					*type = funcs.type;
+					return funcs.actionFunc;
 				}
 			}
 		}
@@ -163,12 +193,12 @@ namespace Components
 		if (pName != nullptr)
 		{
 			const auto name = Utils::String::ToLower(*pName);
-			for (const auto& meth : CustomScrMethods)
+			for (const auto& meths : CustomScrMethods)
 			{
-				if (Utils::Contains(&meth.aliases, name))
+				if (std::ranges::find(meths.aliases, name) != meths.aliases.end())
 				{
-					*type = meth.type;
-					return meth.actionFunc;
+					*type = meths.type;
+					return meths.actionFunc;
 				}
 			}
 		}
@@ -200,99 +230,11 @@ namespace Components
 		return Game::Scr_GetNumParam();
 	}
 
-	const char* Script::GetCodePosForParam(int index)
-	{
-		if (static_cast<unsigned int>(index) >= Game::scrVmPub->outparamcount)
-		{
-			Game::Scr_ParamError(static_cast<unsigned int>(index), "^1GetCodePosForParam: Index is out of range!\n");
-			return "";
-		}
-
-		const auto* value = &Game::scrVmPub->top[-index];
-
-		if (value->type != Game::VAR_FUNCTION)
-		{
-			Game::Scr_ParamError(static_cast<unsigned int>(index), "^1GetCodePosForParam: Expects a function as parameter!\n");
-			return "";
-		}
-
-		return value->u.codePosValue;
-	}
-
-	void Script::GetReplacedPos(const char* pos)
-	{
-		if (ReplacedFunctions.contains(pos))
-		{
-			ReplacedPos = ReplacedFunctions[pos];
-		}
-	}
-
-	void Script::SetReplacedPos(const char* what, const char* with)
-	{
-		if (what[0] == '\0' || with[0] == '\0')
-		{
-			Logger::Warning(Game::CON_CHANNEL_SCRIPT, "Invalid parameters passed to ReplacedFunctions\n");
-			return;
-		}
-
-		if (ReplacedFunctions.contains(what))
-		{
-			Logger::Warning(Game::CON_CHANNEL_SCRIPT, "ReplacedFunctions already contains codePosValue for a function\n");
-		}
-
-		ReplacedFunctions[what] = with;
-	}
-
-	__declspec(naked) void Script::VMExecuteInternalStub()
-	{
-		__asm
-		{
-			pushad
-
-			push edx
-			call GetReplacedPos
-
-			pop edx
-			popad
-
-			cmp ReplacedPos, 0
-			jne SetPos
-
-			movzx eax, byte ptr [edx]
-			inc edx
-
-		Loc1:
-			cmp eax, 0x8B
-
-			push ecx
-
-			mov ecx, 0x2045094
-			mov [ecx], eax
-
-			mov ecx, 0x2040CD4
-			mov [ecx], edx
-
-			pop ecx
-
-			push 0x61E944
-			retn
-
-		SetPos:
-			mov edx, ReplacedPos
-			mov ReplacedPos, 0
-
-			movzx eax, byte ptr [edx]
-			inc edx
-
-			jmp Loc1
-		}
-	}
-
-	Game::client_t* Script::GetClient(const Game::gentity_t* ent)
+	Game::client_s* Script::GetClient(const Game::gentity_s* ent)
 	{
 		assert(ent);
 
-		if (ent->client == nullptr)
+		if (!ent->client)
 		{
 			Game::Scr_ObjectError(Utils::String::VA("Entity %i is not a player", ent->s.number));
 			return nullptr;
@@ -307,69 +249,24 @@ namespace Components
 		return &Game::svs_clients[ent->s.number];
 	}
 
-	void Script::AddFunctions()
+	Game::gentity_s* Script::Scr_GetPlayerEntity(Game::scr_entref_t entref)
 	{
-		AddFunction("ReplaceFunc", [] // gsc: ReplaceFunc(<function>, <function>)
+		if (entref.classnum)
 		{
-			if (Game::Scr_GetNumParam() != 2)
-			{
-				Game::Scr_Error("^1ReplaceFunc: Needs two parameters!\n");
-				return;
-			}
+			Game::Scr_ObjectError("not an entity");
+			return nullptr;
+		}
 
-			const auto what = GetCodePosForParam(0);
-			const auto with = GetCodePosForParam(1);
+		assert(entref.entnum < Game::MAX_GENTITIES);
 
-			SetReplacedPos(what, with);
-		});
-
-		// System time
-		AddFunction("GetSystemMilliseconds", [] // gsc: GetSystemMilliseconds()
+		auto* ent = &Game::g_entities[entref.entnum];
+		if (!ent->client)
 		{
-			SYSTEMTIME time;
-			GetSystemTime(&time);
+			Game::Scr_ObjectError(Utils::String::VA("entity %hu is not a player", entref.entnum));
+			return nullptr;
+		}
 
-			Game::Scr_AddInt(time.wMilliseconds);
-		});
-
-		// Executes command to the console
-		AddFunction("Exec", [] // gsc: Exec(<string>)
-		{
-			const auto str = Game::Scr_GetString(0);
-
-			if (str == nullptr)
-			{
-				Game::Scr_ParamError(0, "^1Exec: Illegal parameter!\n");
-				return;
-			}
-
-			Command::Execute(str, false);
-		});
-
-		// Allow printing to the console even when developer is 0
-		AddFunction("PrintConsole", [] // gsc: PrintConsole(<string>)
-		{
-			for (std::size_t i = 0; i < Game::Scr_GetNumParam(); ++i)
-			{
-				const auto* str = Game::Scr_GetString(i);
-
-				if (str == nullptr)
-				{
-					Game::Scr_ParamError(i, "^1PrintConsole: Illegal parameter!\n");
-					return;
-				}
-
-				Logger::Print(Game::level->scriptPrintChannel, "{}", str);
-			}
-		});
-
-		// PlayerCmd_AreControlsFrozen GSC function from Black Ops 2
-		AddMethod("AreControlsFrozen", [](Game::scr_entref_t entref) // Usage: self AreControlsFrozen();
-		{
-			const auto* ent = Scr_GetPlayerEntity(entref);
-
-			Game::Scr_AddBool((ent->client->flags & Game::PF_FROZEN) != 0);
-		});
+		return ent;
 	}
 
 	Script::Script()
@@ -388,28 +285,8 @@ namespace Components
 
 		Utils::Hook(0x5F41A3, SetExpFogStub, HOOK_CALL).install()->quick();
 
-		Utils::Hook(0x61E92E, VMExecuteInternalStub, HOOK_JUMP).install()->quick();
-		Utils::Hook::Nop(0x61E933, 1);
-
-#ifdef _DEBUG 
-		AddFunction("DebugBox", []
-		{
-			const auto* message = Game::Scr_GetString(0);
-
-			if (message == nullptr)
-			{
-				Game::Scr_Error("^1DebugBox: Illegal parameter!\n");
-			}
-
-			MessageBoxA(nullptr, message, "DEBUG", MB_OK);
-		}, true);
-#endif
-
-		AddFunctions();
-
-		Events::OnVMShutdown([]
-		{
-			ReplacedFunctions.clear();
-		});
+		// Restore IW3's compiler behaviour when dealing with 'overriding builtin function'
+		Utils::Hook::Nop(0x613EDA, 2); // Scr_GetFunction
+		Utils::Hook::Nop(0x613EF0, 2); // Scr_GetMethod
 	}
 }

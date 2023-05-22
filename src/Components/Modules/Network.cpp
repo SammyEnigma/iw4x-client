@@ -2,17 +2,25 @@
 
 namespace Components
 {
-	Utils::Signal<Network::CallbackRaw> Network::StartupSignal;
 	// Packet interception
-	std::unordered_map<std::string, Network::NetworkCallback> Network::CL_Callbacks;
+	std::unordered_map<std::string, Network::networkCallback> Network::CL_Callbacks;
+	std::unordered_map<std::string, Network::networkRawCallback> Network::CL_RawCallbacks;
+
+	Network::Address::Address()
+	{
+		ZeroMemory(&this->address, sizeof(Game::netadr_t));
+		this->setType(Game::NA_BAD);
+	}
 
 	Network::Address::Address(const std::string& addrString)
 	{
+		ZeroMemory(&this->address, sizeof(Game::netadr_t));
 		Game::NET_StringToAdr(addrString.data(), &this->address);
 	}
 
 	Network::Address::Address(sockaddr* addr)
 	{
+		ZeroMemory(&this->address, sizeof(Game::netadr_t));
 		Game::SockadrToNetadr(addr, &this->address);
 	}
 
@@ -23,7 +31,7 @@ namespace Components
 
 	void Network::Address::setPort(unsigned short port)
 	{
-		this->address.port = htons(port);
+		this->address.port = ::htons(port);
 	}
 
 	unsigned short Network::Address::getPort() const
@@ -76,7 +84,7 @@ namespace Components
 		this->toSockAddr(reinterpret_cast<sockaddr*>(addr));
 	}
 
-	Game::netadr_t* Network::Address::get()
+	const Game::netadr_t* Network::Address::get() const noexcept
 	{
 		return &this->address;
 	}
@@ -88,7 +96,7 @@ namespace Components
 
 	std::string Network::Address::getString() const
 	{
-		return {this->getCString()};
+		return std::string{ this->getCString() };
 	}
 
 	bool Network::Address::isLocal() const noexcept
@@ -143,12 +151,7 @@ namespace Components
 		return (this->getType() != Game::NA_BAD && this->getType() >= Game::NA_BOT && this->getType() <= Game::NA_IP);
 	}
 
-	void Network::OnStart(const Utils::Slot<CallbackRaw>& callback)
-	{
-		StartupSignal.connect(callback);
-	}
-
-	void Network::Send(Game::netsrc_t type, Address target, const std::string& data)
+	void Network::Send(Game::netsrc_t type, const Address& target, const std::string& data)
 	{
 		// Do not use NET_OutOfBandPrint. It only supports non-binary data!
 
@@ -159,12 +162,12 @@ namespace Components
 		SendRaw(type, target, rawData);
 	}
 
-	void Network::Send(Address target, const std::string& data)
+	void Network::Send(const Address& target, const std::string& data)
 	{
 		Send(Game::netsrc_t::NS_CLIENT1, target, data);
 	}
 
-	void Network::SendRaw(Game::netsrc_t type, Address target, const std::string& data)
+	void Network::SendRaw(Game::netsrc_t type, const Address& target, const std::string& data)
 	{
 		if (!target.isValid()) return;
 
@@ -172,25 +175,25 @@ namespace Components
 		Game::Sys_SendPacket(type, data.size(), data.data(), *target.get());
 	}
 
-	void Network::SendRaw(Address target, const std::string& data)
+	void Network::SendRaw(const Address& target, const std::string& data)
 	{
 		SendRaw(Game::NS_CLIENT1, target, data);
 	}
 
-	void Network::SendCommand(Game::netsrc_t type, Address target, const std::string& command, const std::string& data)
+	void Network::SendCommand(Game::netsrc_t type, const Address& target, const std::string& command, const std::string& data)
 	{
 		// Use space as separator (possible separators are '\n', ' ').
 		// Though, our handler only needs exactly 1 char as separator and doesn't care which char it is.
 		// EDIT: Most 3rd party tools expect a line break, so let's use that instead!
 		std::string packet;
 		packet.append(command);
-		packet.append("\n", 1);
+		packet.push_back('\n');
 		packet.append(data);
 
 		Send(type, target, packet);
 	}
 
-	void Network::SendCommand(Address target, const std::string& command, const std::string& data)
+	void Network::SendCommand(const Address& target, const std::string& command, const std::string& data)
 	{
 		SendCommand(Game::NS_CLIENT1, target, command, data);
 	}
@@ -219,27 +222,11 @@ namespace Components
 		BroadcastRange(100, 65536, data);
 	}
 
-	void Network::NetworkStart()
-	{
-		StartupSignal();
-		StartupSignal.clear();
-	}
-
 	std::uint16_t Network::GetPort()
 	{
 		assert((*Game::port));
 		assert((*Game::port)->current.unsignedInt <= std::numeric_limits<std::uint16_t>::max());
 		return static_cast<std::uint16_t>((*Game::port)->current.unsignedInt);
-	}
-
-	__declspec(naked) void Network::NetworkStartStub()
-	{
-		__asm
-		{
-			mov eax, 64D900h
-			call eax
-			jmp NetworkStart
-		}
 	}
 
 	__declspec(naked) void Network::PacketErrorCheck()
@@ -261,40 +248,43 @@ namespace Components
 		}
 	}
 
-	void Network::SV_ExecuteClientMessageStub(Game::client_t* client, Game::msg_t* msg)
-	{
-		if (client->reliableAcknowledge < 0)
-		{
-			Logger::Print(Game::CON_CHANNEL_NETWORK, "Negative reliableAcknowledge from {} - cl->reliableSequence is {}, reliableAcknowledge is {}\n",
-				client->name, client->reliableSequence, client->reliableAcknowledge);
-			client->reliableAcknowledge = client->reliableSequence;
-			SendCommand(Game::NS_SERVER, client->header.netchan.remoteAddress, "error", "EXE_LOSTRELIABLECOMMANDS");
-			return;
-		}
-
-		Utils::Hook::Call<void(Game::client_t*, Game::msg_t*)>(0x414D40)(client, msg);
-	}
-
-	void Network::OnClientPacket(const std::string& command, const NetworkCallback& callback)
+	void Network::OnClientPacket(const std::string& command, const networkCallback& callback)
 	{
 		CL_Callbacks[Utils::String::ToLower(command)] = callback;
 	}
 
-	bool Network::CL_HandleCommand(Game::netadr_t* address, const char* command, const Game::msg_t* message)
+	void Network::OnClientPacketRaw(const std::string& command, const networkRawCallback& callback)
+	{
+		CL_RawCallbacks[Utils::String::ToLower(command)] = callback;
+	}
+
+	bool Network::CL_HandleCommand(Game::netadr_t* address, const char* command, Game::msg_t* message)
 	{
 		const auto command_ = Utils::String::ToLower(command);
-		const auto handler = CL_Callbacks.find(command_);
 
 		const auto offset = command_.size() + 5;
-		if (static_cast<std::size_t>(message->cursize) < offset || handler == CL_Callbacks.end())
+		if (static_cast<std::size_t>(message->cursize) < offset)
 		{
 			return false;
 		}
 
-		const std::string data(reinterpret_cast<char*>(message->data) + offset, message->cursize - offset);
+		if (const auto rawHandler = CL_RawCallbacks.find(command_); rawHandler != CL_RawCallbacks.end())
+		{
+			rawHandler->second(address, message);
+			return true;
+		}
 
-		auto address_ = Address(address);
-		handler->second(address_, data);
+		const auto handler = CL_Callbacks.find(command_);
+		if (handler == CL_Callbacks.end())
+		{
+			// Normal handler was not found, return
+			return false;
+		}
+
+		const std::string data{ reinterpret_cast<char*>(message->data) + offset, message->cursize - offset };
+
+		auto target = Address{ address };
+		handler->second(target, data);
 		return true;
 	}
 
@@ -353,14 +343,8 @@ namespace Components
 		// Parse port as short in Net_AddrToString
 		Utils::Hook::Set<const char*>(0x4698E3, "%u.%u.%u.%u:%hu");
 
-		// Install startup handler
-		Utils::Hook(0x4FD4D4, NetworkStartStub, HOOK_JUMP).install()->quick();
-
 		// Prevent recvfrom error spam
 		Utils::Hook(0x46531A, PacketErrorCheck, HOOK_JUMP).install()->quick();
-
-		// Fix server freezer exploit
-		Utils::Hook(0x626996, SV_ExecuteClientMessageStub, HOOK_CALL).install()->quick();
 		
 		// Handle client packets
 		Utils::Hook(0x5AA703, CL_HandleCommandStub, HOOK_JUMP).install()->quick();
@@ -369,8 +353,12 @@ namespace Components
 		Utils::Hook::Set<std::uint8_t>(0x5AA5B6, 0xEB); // CL_SteamServerAuth
 		Utils::Hook::Set<std::uint8_t>(0x5AA69F, 0xEB); // echo
 		Utils::Hook::Set<std::uint8_t>(0x5AAA82, 0xEB); // SP
+		Utils::Hook::Set<std::uint8_t>(0x5A9F77, 0xEB); // CL_WeNowCantHearSomeone
 		Utils::Hook::Set<std::uint8_t>(0x5A9F18, 0xEB); // CL_VoiceConnectionTestPacket
 		Utils::Hook::Set<std::uint8_t>(0x5A9FF3, 0xEB); // CL_HandleRelayPacket
+
+		// For security reasons check the sender of the 'print' OOB
+		Utils::Hook::Set<std::uint8_t>(0x5AA729, 0xEB);
 
 		// Com_GetProtocol
 		Utils::Hook::Set<std::uint32_t>(0x4FB501, PROTOCOL);
@@ -390,9 +378,39 @@ namespace Components
 		Utils::Hook::Set<std::uint8_t>(0x682170, 0xC3); // Telling LSP that we're playing a private match
 		Utils::Hook::Nop(0x4FD448, 5); // Don't create lsp_socket
 
-		OnClientPacket("resolveAddress", [](const Address& address, [[maybe_unused]] const std::string& data)
+		// Do not run UPNP stuff at all
+		Utils::Hook::Set<std::uint8_t>(0x48A135, 0xC3);
+		Utils::Hook::Nop(0x48A135 + 1, 4);
+
+		Utils::Hook::Set<std::uint8_t>(0x48A151, 0xC3);
+		Utils::Hook::Nop(0x48A151 + 1, 4);
+
+		// Don't spam the console
+		Utils::Hook(0x684080, Game::Com_DPrintf, HOOK_CALL).install()->quick();
+
+		// Disable the IWNet IP detection (default 'got ipdetect' flag to 1)
+		Utils::Hook::Set<std::uint8_t>(0x649D6F0, 1);
+
+		OnClientPacket("resolveAddress", []([[maybe_unused]] const Address& address, [[maybe_unused]] const std::string& data)
 		{
 			SendRaw(address, address.getString());
+		});
+
+		OnClientPacketRaw("print", [](Game::netadr_t* address, Game::msg_t* msg)
+		{
+			auto* clc = Game::CL_GetLocalClientConnection(0);
+			if (!Game::NET_CompareBaseAdr(clc->serverAddress, *address))
+			{
+				Logger::Debug("Ignoring stray 'print' network message from '{}'", Game::NET_AdrToString(*address));
+				return;
+			}
+
+			char printBuf[2048]{};
+
+			const auto* s = Game::MSG_ReadBigString(msg);
+			Game::I_strncpyz(clc->serverMessage, s, sizeof(clc->serverMessage));
+			Game::Com_sprintf(printBuf, sizeof(printBuf), "%s", s);
+			Game::Com_PrintMessage(Game::CON_CHANNEL_CLIENT, printBuf, false);
 		});
 	}
 }

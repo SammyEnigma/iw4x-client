@@ -1,5 +1,8 @@
 #include <STDInclude.hpp>
 
+#include "Friends.hpp"
+#include "TextRenderer.hpp"
+
 namespace Components
 {
 	Dvar::Var Dvar::Name;
@@ -257,7 +260,7 @@ namespace Components
 
 	void Dvar::SetFromStringByNameSafeExternal(const char* dvarName, const char* string)
 	{
-		static std::array<const char*, 8> exceptions =
+		static std::array exceptions =
 		{
 			"ui_showEndOfGame",
 			"systemlink",
@@ -271,7 +274,7 @@ namespace Components
 
 		for (const auto& entry : exceptions)
 		{
-			if (Utils::String::Compare(dvarName, entry))
+			if (!_stricmp(dvarName, entry))
 			{
 				Game::Dvar_SetFromStringByNameFromSource(dvarName, string, Game::DVAR_SOURCE_INTERNAL);
 				return;
@@ -298,8 +301,26 @@ namespace Components
 		return flag.value();
 	}
 
+	bool Dvar::IsSettingDvarsDisabled()
+	{
+		static std::optional<bool> flag;
+
+		if (!flag.has_value())
+		{
+			flag.emplace(Flags::HasFlag("protect-dvars"));
+		}
+
+		return flag.value();
+	}
+
 	void Dvar::DvarSetFromStringByName_Stub(const char* dvarName, const char* value)
 	{
+		if (IsSettingDvarsDisabled())
+		{
+			Logger::Debug("Not allowing server to set '{}'", dvarName);
+			return;
+		}
+
 		// Save the dvar original value if it has the archive flag
 		const auto* dvar = Game::Dvar_FindVar(dvarName);
 		if (dvar && dvar->flags & Game::DVAR_ARCHIVE)
@@ -393,8 +414,29 @@ namespace Components
 		// un-cheat cg_draw2D
 		Utils::Hook::Set<std::uint8_t>(0x4F8EEE, Game::DVAR_NONE);
 
+		// un-cheat cg_overheadNamesFarScale
+		Utils::Hook::Set<std::uint8_t>(0x4FA7C4, Game::DVAR_NONE);
+
+		// un-cheat cg_overheadNamesSize
+		Utils::Hook::Set<std::uint8_t>(0x4FA7F9, Game::DVAR_NONE);
+
+		// un-cheat cg_overheadRankSize
+		Utils::Hook::Set<std::uint8_t>(0x4FA863, Game::DVAR_NONE);
+
+		// un-cheat cg_overheadIconSize
+		Utils::Hook::Set<std::uint8_t>(0x4FA833, Game::DVAR_NONE);
+
+		// un-cheat cg_overheadTitleSize
+		Utils::Hook::Set<std::uint8_t>(0x4FA898, Game::DVAR_NONE);
+
+		// un-cheat cg_overheadNamesGlow
+		Utils::Hook::Set<std::uint8_t>(0x4FA8C9, Game::DVAR_NONE);
+
 		// remove archive flags for cg_hudChatPosition
 		Utils::Hook::Xor<std::uint8_t>(0x4F9992, Game::DVAR_ARCHIVE);
+
+		// remove archive flags for sv_hostname
+		Utils::Hook::Xor<std::uint32_t>(0x4D3786, Game::DVAR_ARCHIVE);
 
 		// remove write protection from fs_game
 		Utils::Hook::Xor<std::uint32_t>(0x6431EA, Game::DVAR_INIT);
@@ -408,11 +450,29 @@ namespace Components
 		static float volume = 1.0f;
 		Utils::Hook::Set<float*>(0x408078, &volume);
 
-		// Uncheat ui_showList
+		// un-cheat ui_showList
 		Utils::Hook::Xor<std::uint8_t>(0x6310DC, Game::DVAR_CHEAT);
 
-		// Uncheat ui_debugMode
+		// un-cheat ui_debugMode
 		Utils::Hook::Xor<std::uint8_t>(0x6312DE, Game::DVAR_CHEAT);
+
+		// un-cheat jump_slowdownEnable
+		Utils::Hook::Xor<std::uint32_t>(0x4EFABE, Game::DVAR_CHEAT);
+
+		// un-cheat jump_height
+		Utils::Hook::Xor<std::uint32_t>(0x4EFA5C, Game::DVAR_CHEAT);
+
+		// un-cheat player_breath_fire_delay
+		Utils::Hook::Xor<std::uint32_t>(0x448646, Game::DVAR_CHEAT);
+
+		// un-cheat player_breath_gasp_scale
+		Utils::Hook::Xor<std::uint32_t>(0x448678, Game::DVAR_CHEAT);
+
+		// un-cheat player_breath_gasp_lerp
+		Utils::Hook::Xor<std::uint32_t>(0x4486E4, Game::DVAR_CHEAT);
+
+		// un-cheat player_breath_gasp_time
+		Utils::Hook::Xor<std::uint32_t>(0x448612, Game::DVAR_CHEAT);
 
 		// Hook dvar 'name' registration
 		Utils::Hook(0x40531C, Dvar_RegisterName, HOOK_CALL).install()->quick();
@@ -447,7 +507,7 @@ namespace Components
 		Utils::Hook(0x636608, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
 		Utils::Hook(0x636695, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
 
-		// Hook Dvar_SetFromStringByName inside CG_SetClientDvarFromServer so we can reset dvars when the player leaves the server
+		// Hook Dvar_SetFromStringByName inside CG_SetClientDvarFromServer so we can protect dvars
 		Utils::Hook(0x59386A, DvarSetFromStringByName_Stub, HOOK_CALL).install()->quick();
 
 		// For debugging

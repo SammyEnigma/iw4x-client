@@ -1,5 +1,6 @@
 #include <STDInclude.hpp>
 #include "Bans.hpp"
+#include "Events.hpp"
 
 namespace Components
 {
@@ -8,7 +9,7 @@ namespace Components
 	// Have only one instance of IW4x read/write the file
 	std::unique_lock<Utils::NamedMutex> Bans::Lock()
 	{
-		static Utils::NamedMutex mutex{"iw4x-ban-list-lock"};
+		static Utils::NamedMutex mutex{ "iw4x-ban-list-lock" };
 		std::unique_lock lock{mutex};
 		return lock;
 	}
@@ -140,7 +141,7 @@ namespace Components
 		}
 		catch (const std::exception& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "Json Parse Error: {}\n", ex.what());
+			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
 			return;
 		}
 
@@ -186,12 +187,12 @@ namespace Components
 		}
 	}
 
-	void Bans::BanClient(Game::client_t* cl, const std::string& reason)
+	void Bans::BanClient(Game::client_s* cl, const std::string& reason)
 	{
 		SteamID guid;
 		guid.bits = cl->steamID;
 
-		InsertBan({guid, cl->header.netchan.remoteAddress.ip});
+		InsertBan({ guid, cl->header.netchan.remoteAddress.ip });
 
 		Game::SV_DropClient(cl, reason.data(), true);
 	}
@@ -232,9 +233,9 @@ namespace Components
 		SaveBans(&list);
 	}
 
-	Bans::Bans()
+	void Bans::AddServerCommands()
 	{
-		Command::Add("banClient", [](Command::Params* params)
+		Command::AddSV("banClient", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
@@ -259,17 +260,17 @@ namespace Components
 				}
 			}
 
-			const auto num = std::atoi(input);
-			if (num < 0 || num >= *Game::svs_clientCount)
+			const auto clientNum = std::strtoul(input, nullptr, 10);
+			if (clientNum >= Game::MAX_CLIENTS)
 			{
-				Logger::Print("Bad client slot: {}\n", num);
+				Logger::Print("Bad client slot: {}\n", clientNum);
 				return;
 			}
 
-			const auto* cl = &Game::svs_clients[num];
-			if (cl->header.state == Game::CS_FREE)
+			auto* cl = &Game::svs_clients[clientNum];
+			if (cl->header.state < Game::CS_ACTIVE)
 			{
-				Logger::Print("Client {} is not active\n", num);
+				Logger::Print("Client {} is not active\n", clientNum);
 				return;
 			}
 
@@ -278,11 +279,11 @@ namespace Components
 				return;
 			}
 
-			const std::string reason = params->size() < 3 ? "EXE_ERR_BANNED_PERM" : params->join(2);
-			BanClient(&Game::svs_clients[num], reason);
+			const auto reason = params->size() < 3 ? "EXE_ERR_BANNED_PERM"s : params->join(2);
+			BanClient(cl, reason);
 		});
 
-		Command::Add("unbanClient", [](Command::Params* params)
+		Command::AddSV("unbanClient", [](const Command::Params* params)
 		{
 			if (!Dedicated::IsRunning())
 			{
@@ -309,12 +310,17 @@ namespace Components
 			else if (type == "guid"s)
 			{
 				SteamID id;
-				id.bits = strtoull(params->get(2), nullptr, 16);
+				id.bits = std::strtoull(params->get(2), nullptr, 16);
 
 				UnbanClient(id);
 
 				Logger::Print("Unbanned GUID {}\n", params->get(2));
 			}
 		});
+	}
+
+	Bans::Bans()
+	{
+		Events::OnSVInit(AddServerCommands);
 	}
 }

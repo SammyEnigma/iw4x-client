@@ -2,8 +2,8 @@
 
 namespace Components
 {
-	std::unordered_map<std::string, std::function<void(Command::Params*)>> Command::FunctionMap;
-	std::unordered_map<std::string, std::function<void(Command::Params*)>> Command::FunctionMapSV;
+	std::unordered_map<std::string, Command::commandCallback> Command::FunctionMap;
+	std::unordered_map<std::string, Command::commandCallback> Command::FunctionMapSV;
 
 	std::string Command::Params::join(const int index) const
 	{
@@ -68,7 +68,7 @@ namespace Components
 		});
 	}
 
-	void Command::Add(const char* name, const std::function<void(Params*)>& callback)
+	void Command::Add(const char* name, const commandCallback& callback)
 	{
 		const auto command = Utils::String::ToLower(name);
 
@@ -80,16 +80,14 @@ namespace Components
 		FunctionMap.insert_or_assign(command, callback);
 	}
 
-	void Command::AddSV(const char* name, const std::function<void(Params*)>& callback)
+	void Command::AddSV(const char* name, const commandCallback& callback)
 	{
 		if (Loader::IsPregame())
 		{
 			MessageBoxA(nullptr, "Registering server commands in pregame state is illegal!", nullptr, MB_ICONERROR);
-
 #ifdef _DEBUG
 			__debugbreak();
 #endif
-
 			return;
 		}
 
@@ -118,7 +116,14 @@ namespace Components
 
 	void Command::Execute(std::string command, bool sync)
 	{
-		command.append("\n"); // Make sure it's terminated
+		if (command.empty())
+		{
+			return;
+		}
+
+		command.push_back('\n'); // Make sure it's terminated
+
+		assert(command.size() < Game::MAX_CMD_LINE);
 
 		if (sync)
 		{
@@ -134,9 +139,9 @@ namespace Components
 	{
 		auto* cmdFunction = *Game::cmd_functions;
 
-		while (cmdFunction != nullptr)
+		while (cmdFunction)
 		{
-			if (cmdFunction->name != nullptr && cmdFunction->name == command)
+			if (cmdFunction->name && Utils::String::Compare(cmdFunction->name, command))
 			{
 				return cmdFunction;
 			}
@@ -172,5 +177,53 @@ namespace Components
 		{
 			itr->second(&params);
 		}
+	}
+
+	const std::vector<std::string>& Command::GetExceptions()
+	{
+		static const auto exceptions = []() -> std::vector<std::string>
+		{
+			std::vector<std::string> values =
+			{
+				"cmd",
+				"exec",
+				"map",
+			};
+
+			if (Flags::HasFlag("disable-notifies"))
+			{
+				values.emplace_back("vstr");
+				values.emplace_back("wait");
+			}
+
+			return values;
+		}();
+
+		return exceptions;
+	}
+
+	bool Command::CL_ShouldSendNotify_Hk(const char* cmd)
+	{
+		if (!cmd)
+		{
+			return false;
+		}
+
+		const auto& exceptions = GetExceptions();
+		for (const auto& entry : exceptions)
+		{
+			if (Utils::String::Compare(cmd, entry))
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	Command::Command()
+	{
+		// Protect players from invasive servers
+		Utils::Hook(0x434BD4, CL_ShouldSendNotify_Hk, HOOK_CALL).install()->quick();  // CL_CheckNotify
 	}
 }

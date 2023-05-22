@@ -12,13 +12,13 @@ jobs:
     name: "Draft a new release"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v3.5.2
 
       - name: Normalize version
         id: normalize_version
         run: |
           version="${{ github.event.inputs.version }}"
-          version="v${version#v}"
+          version="r${version#v}"
           echo "::set-output name=version::$version"
 
       # Set up committer info and GPG key

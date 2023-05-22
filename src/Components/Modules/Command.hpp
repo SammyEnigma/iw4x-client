@@ -52,25 +52,30 @@ namespace Components
 			int nesting_;
 		};
 
-		Command() = default;
+		Command();
 
-		static Game::cmd_function_s* Allocate();
+		using commandCallback = std::function<void(const Params*)>;
 
 		static void Add(const char* name, const std::function<void()>& callback);
-		static void Add(const char* name, const std::function<void(Command::Params*)>& callback);
+		static void Add(const char* name, const commandCallback& callback);
 		static void AddRaw(const char* name, void(*callback)(), bool key = false);
-		static void AddSV(const char* name, const std::function<void(Command::Params*)>& callback);
+		static void AddSV(const char* name, const commandCallback& callback);
 		static void Execute(std::string command, bool sync = true);
 
 		static Game::cmd_function_s* Find(const std::string& command);
 
 	private:
-		static std::unordered_map<std::string, std::function<void(Command::Params*)>> FunctionMap;
-		static std::unordered_map<std::string, std::function<void(Command::Params*)>> FunctionMapSV;
+		static std::unordered_map<std::string, commandCallback> FunctionMap;
+		static std::unordered_map<std::string, commandCallback> FunctionMapSV;
+
+		static Game::cmd_function_s* Allocate();
 
 		static void AddRawSV(const char* name, void(*callback)());
 
 		static void MainCallback();
 		static void MainCallbackSV();
+
+		static const std::vector<std::string>& GetExceptions();
+		static bool CL_ShouldSendNotify_Hk(const char* cmd);
 	};
 }

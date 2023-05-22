@@ -101,6 +101,7 @@ namespace Game
 	extern const dvar_t** fs_gameDirVar;
 	extern const dvar_t** fs_homepath;
 
+	extern const dvar_t** sv_privatePassword;
 	extern const dvar_t** sv_hostname;
 	extern const dvar_t** sv_gametype;
 	extern const dvar_t** sv_mapname;
@@ -123,9 +124,12 @@ namespace Game
 	extern const dvar_t** g_oldVoting;
 	extern const dvar_t** g_gametype;
 	extern const dvar_t** g_password;
+	extern const dvar_t** g_log;
 
 	extern const dvar_t** cg_chatHeight;
 	extern const dvar_t** cg_chatTime;
+	extern const dvar_t** cg_scoreboardHeight;
+	extern const dvar_t** cg_scoreboardWidth;
 
 	extern const dvar_t** version;
 
@@ -147,6 +151,6 @@ namespace Game
 	extern const dvar_t** ip;
 	extern const dvar_t** port;
 
-	extern void Dvar_SetVariant(dvar_t* var, DvarValue value, DvarSetSource source);
+	extern void Dvar_SetVariant(dvar_t* dvar, DvarValue value, DvarSetSource source);
 	extern void Dvar_SetFromStringFromSource(const dvar_t* dvar, const char* string, DvarSetSource source);
 }

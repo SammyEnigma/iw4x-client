@@ -9,11 +9,23 @@ namespace Components
 {
 	std::unordered_map<std::string, std::function<void(Game::gentity_s*, const Command::ServerParams*)>> ClientCommand::HandlersSV;
 
+	bool ClientCommand::CheatsEnabled;
+
+	ClientCommand::CheatsScopedLock::CheatsScopedLock()
+	{
+		CheatsEnabled = true;
+	}
+
+	ClientCommand::CheatsScopedLock::~CheatsScopedLock()
+	{
+		CheatsEnabled = false;
+	}
+
 	bool ClientCommand::CheatsOk(const Game::gentity_s* ent)
 	{
 		const auto entNum = ent->s.number;
 
-		if (!(*Game::g_cheats)->current.enabled)
+		if (!(*Game::g_cheats)->current.enabled && !CheatsEnabled)
 		{
 			Logger::Debug("Cheats are disabled!");
 			Game::SV_GameSendServerCommand(entNum, Game::SV_CMD_CAN_IGNORE, VA("%c \"GAME_CHEATSNOTENABLED\"", 0x65));
@@ -61,31 +73,8 @@ namespace Components
 
 	void ClientCommand::AddCheatCommands()
 	{
-		Add("noclip", [](Game::gentity_s* ent, [[maybe_unused]] const Command::ServerParams* params)
-		{
-			if (!CheatsOk(ent))
-				return;
-
-			ent->client->flags ^= Game::PF_NOCLIP;
-
-			const auto entNum = ent->s.number;
-			Logger::Debug("Noclip toggled for entity {}", entNum);
-
-			Game::SV_GameSendServerCommand(entNum, Game::SV_CMD_CAN_IGNORE, VA("%c \"%s\"", 0x65, (ent->client->flags & Game::PF_NOCLIP) ? "GAME_NOCLIPON" : "GAME_NOCLIPOFF"));
-		});
-
-		Add("ufo", [](Game::gentity_s* ent, [[maybe_unused]] const Command::ServerParams* params)
-		{
-			if (!CheatsOk(ent))
-				return;
-
-			ent->client->flags ^= Game::PF_UFO;
-
-			const auto entNum = ent->s.number;
-			Logger::Debug("UFO toggled for entity {}", entNum);
-
-			Game::SV_GameSendServerCommand(entNum, Game::SV_CMD_CAN_IGNORE, VA("%c \"%s\"", 0x65, (ent->client->flags & Game::PF_UFO) ? "GAME_UFOON" : "GAME_UFOOFF"));
-		});
+		Add("noclip", Cmd_Noclip_f);
+		Add("ufo", Cmd_UFO_f);
 
 		Add("god", [](Game::gentity_s* ent, [[maybe_unused]] const Command::ServerParams* params)
 		{
@@ -309,8 +298,7 @@ namespace Components
 			const auto* name = params->get(1);
 
 			ent->client->visionDuration[visMode] = duration;
-			strncpy_s(ent->client->visionName[visMode],
-				sizeof(Game::gclient_t::visionName[0]) / sizeof(char), name, _TRUNCATE);
+			strncpy_s(ent->client->visionName[visMode], sizeof(Game::gclient_s::visionName[0]) / sizeof(char), name, _TRUNCATE);
 
 			Game::SV_GameSendServerCommand(ent->s.number, Game::SV_CMD_RELIABLE, VA("%c \"%s\" %i", Game::MY_CMDS[visMode], name, duration));
 		});
@@ -336,8 +324,7 @@ namespace Components
 			const auto* name = params->get(1);
 
 			ent->client->visionDuration[visMode] = duration;
-			strncpy_s(ent->client->visionName[visMode],
-				sizeof(Game::gclient_t::visionName[0]) / sizeof(char), name, _TRUNCATE);
+			strncpy_s(ent->client->visionName[visMode], sizeof(Game::gclient_s::visionName[0]) / sizeof(char), name, _TRUNCATE);
 
 			Game::SV_GameSendServerCommand(ent->s.number, Game::SV_CMD_RELIABLE, VA("%c \"%s\" %i", Game::MY_CMDS[visMode], name, duration));
 		});
@@ -363,9 +350,28 @@ namespace Components
 
 	void ClientCommand::AddScriptFunctions()
 	{
-		Script::AddFunction("DropAllBots", [] // gsc: DropAllBots();
+		GSC::Script::AddFunction("DropAllBots", [] // gsc: DropAllBots();
 		{
 			Game::SV_DropAllBots();
+		});
+	}
+
+	void ClientCommand::AddScriptMethods()
+	{
+		GSC::Script::AddMethod("Noclip", [](const Game::scr_entref_t entref) // gsc: self Noclip();
+		{
+			auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
+
+			CheatsScopedLock cheatsLock;
+			Cmd_Noclip_f(ent, nullptr);
+		});
+
+		GSC::Script::AddMethod("Ufo", [](const Game::scr_entref_t entref) // gsc: self Ufo();
+		{
+			auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
+
+			CheatsScopedLock cheatsLock;
+			Cmd_UFO_f(ent, nullptr);
 		});
 	}
 
@@ -477,6 +483,32 @@ namespace Components
 		Logger::Print(Game::CON_CHANNEL_SERVER, "Done writing file.\n");
 	}
 
+	void ClientCommand::Cmd_Noclip_f(Game::gentity_s* ent, [[maybe_unused]] const Command::ServerParams* params)
+	{
+		if (!CheatsOk(ent))
+			return;
+
+		ent->client->flags ^= Game::CF_BIT_NOCLIP;
+
+		const auto entNum = ent->s.number;
+		Logger::Debug("Noclip toggled for entity {}", entNum);
+
+		Game::SV_GameSendServerCommand(entNum, Game::SV_CMD_CAN_IGNORE, VA("%c \"%s\"", 0x65, (ent->client->flags & Game::CF_BIT_NOCLIP) ? "GAME_NOCLIPON" : "GAME_NOCLIPOFF"));
+	}
+
+	void ClientCommand::Cmd_UFO_f(Game::gentity_s* ent, [[maybe_unused]] const Command::ServerParams* params)
+	{
+		if (!CheatsOk(ent))
+			return;
+
+		ent->client->flags ^= Game::CF_BIT_UFO;
+
+		const auto entNum = ent->s.number;
+		Logger::Debug("UFO toggled for entity {}", entNum);
+
+		Game::SV_GameSendServerCommand(entNum, Game::SV_CMD_CAN_IGNORE, VA("%c \"%s\"", 0x65, (ent->client->flags & Game::CF_BIT_UFO) ? "GAME_UFOON" : "GAME_UFOOFF"));
+	}
+
 	ClientCommand::ClientCommand()
 	{
 		AssertOffset(Game::playerState_s, stats, 0x150);
@@ -484,8 +516,11 @@ namespace Components
 		// Hook call to ClientCommand in SV_ExecuteClientCommand so we may add custom commands
 		Utils::Hook(0x6259FA, ClientCommandStub, HOOK_CALL).install()->quick();
 
+		CheatsEnabled = false;
+
 		AddCheatCommands();
 		AddScriptFunctions();
+		AddScriptMethods();
 #ifdef _DEBUG
 		AddDevelopmentCommands();
 #endif

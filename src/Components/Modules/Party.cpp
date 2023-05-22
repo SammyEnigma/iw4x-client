@@ -1,14 +1,20 @@
 #include <STDInclude.hpp>
 #include <Utils/InfoString.hpp>
 
+#include "Auth.hpp"
 #include "Download.hpp"
+#include "Friends.hpp"
 #include "Gamepad.hpp"
+#include "Node.hpp"
 #include "Party.hpp"
 #include "ServerList.hpp"
 #include "Stats.hpp"
+#include "TextRenderer.hpp"
 #include "Voice.hpp"
 
 #include <version.hpp>
+
+#define CL_MOD_LOADING
 
 namespace Components
 {
@@ -221,8 +227,8 @@ namespace Components
 		// causes 'does current Steam lobby match' calls in Steam_JoinLobby to be ignored
 		Utils::Hook::Set<BYTE>(0x49D007, 0xEB);
 
-		// functions checking party heartbeat timeouts, cause random issues
-		Utils::Hook::Nop(0x4E532D, 5);
+		// function checking party heartbeat timeouts, cause random issues
+		Utils::Hook::Nop(0x4E532D, 5); // PartyHost_TimeoutMembers
 
 		// Steam_JoinLobby call causes migration
 		Utils::Hook::Nop(0x5AF851, 5);
@@ -288,7 +294,7 @@ namespace Components
 		Utils::Hook::Xor<DWORD>(0x4D376D, Game::DVAR_LATCH);
 		Utils::Hook::Xor<DWORD>(0x5E3789, Game::DVAR_LATCH);
 
-		Command::Add("connect", [](Command::Params* params)
+		Command::Add("connect", [](const Command::Params* params)
 		{
 			if (params->size() < 2)
 			{
@@ -306,7 +312,7 @@ namespace Components
 			}
 		});
 
-		Command::Add("reconnect", [](Command::Params*)
+		Command::Add("reconnect", []()
 		{
 			Connect(Container.target);
 		});
@@ -340,7 +346,7 @@ namespace Components
 		Network::OnClientPacket("getInfo", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
 			auto botCount = 0;
-			auto clientCount = 0;
+			auto effectiveClientCount = 0;
 			auto maxClientCount = *Game::svs_clientCount;
 			const auto securityLevel = Dvar::Var("sv_securityLevel").get<int>();
 			const auto* password = *Game::g_password ? (*Game::g_password)->current.string : "";
@@ -349,17 +355,25 @@ namespace Components
 			{
 				for (int i = 0; i < maxClientCount; ++i)
 				{
-					if (Game::svs_clients[i].header.state >= Game::CS_CONNECTED)
+					if (Game::svs_clients[i].header.state < Game::CS_ACTIVE) continue;
+					if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client) continue;
+
+					const auto* client = Game::svs_clients[i].gentity->client;
+					const auto team = client->sess.cs.team;
+					if (Game::svs_clients[i].bIsTestClient || team == Game::TEAM_SPECTATOR)
 					{
-						if (Game::svs_clients[i].bIsTestClient) ++botCount;
-						else ++clientCount;
+						++botCount;
+					}
+					else
+					{
+						++effectiveClientCount;
 					}
 				}
 			}
 			else
 			{
 				maxClientCount = *Game::party_maxplayers ? (*Game::party_maxplayers)->current.integer : 18;
-				clientCount = Game::PartyHost_CountMembers(Game::g_lobbyData);
+				effectiveClientCount = Game::PartyHost_CountMembers(Game::g_lobbyData);
 			}
 
 			Utils::InfoString info;
@@ -369,11 +383,11 @@ namespace Components
 			info.set("gametype", (*Game::sv_gametype)->current.string);
 			info.set("fs_game", (*Game::fs_gameDirVar)->current.string);
 			info.set("xuid", Utils::String::VA("%llX", Steam::SteamUser()->GetSteamID().bits));
-			info.set("clients", std::to_string(clientCount));
+			info.set("clients", std::to_string(effectiveClientCount));
 			info.set("bots", std::to_string(botCount));
 			info.set("sv_maxclients", std::to_string(maxClientCount));
 			info.set("protocol", std::to_string(PROTOCOL));
-			info.set("shortversion", SHORTVERSION);
+			info.set("version", REVISION_STR);
 			info.set("checksum", std::to_string(Game::Sys_Milliseconds()));
 			info.set("mapname", Dvar::Var("mapname").get<std::string>());
 			info.set("isPrivate", *password ? "1" : "0");
@@ -424,7 +438,7 @@ namespace Components
 			info.set("wwwDownload", (Download::SV_wwwDownload.get<bool>() ? "1" : "0"));
 			info.set("wwwUrl", Download::SV_wwwBaseUrl.get<std::string>());
 
-			Network::SendCommand(address, "infoResponse", "\\" + info.build());
+			Network::SendCommand(address, "infoResponse", info.build());
 		});
 
 		Network::OnClientPacket("infoResponse", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
@@ -440,13 +454,13 @@ namespace Components
 					Container.valid = false;
 					Container.info = info;
 
-					Container.matchType = atoi(info.get("matchtype").data());
-					auto securityLevel = static_cast<std::uint32_t>(atoi(info.get("securityLevel").data()));
+					Container.matchType = std::strtol(info.get("matchtype").data(), nullptr, 10);
+					auto securityLevel = std::strtoul(info.get("securityLevel").data(), nullptr, 10);
 					bool isUsermap = !info.get("usermaphash").empty();
-					auto usermapHash = static_cast<std::uint32_t>(atoi(info.get("usermaphash").data()));
-
+					auto usermapHash = std::strtoul(info.get("usermaphash").data(), nullptr, 10);
+#ifdef CL_MOD_LOADING
 					std::string mod = (*Game::fs_gameDirVar)->current.string;
-
+#endif
 					// set fast server stuff here so its updated when we go to download stuff
 					if (info.get("wwwDownload") == "1"s)
 					{
@@ -480,7 +494,7 @@ namespace Components
 					{
 						ConnectError("Invalid map or gametype.");
 					}
-					else if (Container.info.get("isPrivate") == "1"s && !Dvar::Var("password").get<std::string>().length())
+					else if (Container.info.get("isPrivate") == "1"s && Dvar::Var("password").get<std::string>().empty())
 					{
 						ConnectError("A password is required to join this server! Set it at the bottom of the serverlist.");
 					}
@@ -489,6 +503,7 @@ namespace Components
 						Command::Execute("closemenu popup_reconnectingtoparty");
 						Download::InitiateMapDownload(info.get("mapname"), info.get("isPrivate") == "1");
 					}
+#ifdef CL_MOD_LOADING
 					else if (!info.get("fs_game").empty() && Utils::String::ToLower(mod) != Utils::String::ToLower(info.get("fs_game")))
 					{
 						Command::Execute("closemenu popup_reconnectingtoparty");
@@ -505,11 +520,12 @@ namespace Components
 
 						Command::Execute("reconnect", false);
 					}
+#endif
 					else
 					{
 						if (!Maps::CheckMapInstalled(Container.info.get("mapname"), true)) return;
 
-						Container.motd = info.get("sv_motd");
+						Container.motd = TextRenderer::StripMaterialTextIcons(info.get("sv_motd"));
 
 						if (Container.matchType == 1) // Party
 						{
@@ -543,7 +559,7 @@ namespace Components
 
 							if (clients >= maxClients)
 							{
-								Party::ConnectError("@EXE_SERVERISFULL");
+								ConnectError("@EXE_SERVERISFULL");
 							}
 							else
 							{

@@ -1,13 +1,16 @@
 #include <STDInclude.hpp>
 #include "Isnd_alias_list_t.hpp"
 
-#include <Utils/Json.hpp>
-
 namespace Assets
 {
 	void Isnd_alias_list_t::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
 		header->sound = builder->getIW4OfApi()->read<Game::snd_alias_list_t>(Game::XAssetType::ASSET_TYPE_SOUND, name);
+		
+		if (!header->sound)
+		{
+			header->sound = Components::AssetHandler::FindOriginalAsset(Game::XAssetType::ASSET_TYPE_SOUND_CURVE, name.data()).sound;
+		}
 	}
 
 	void Isnd_alias_list_t::mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
@@ -33,6 +36,24 @@ namespace Assets
 				}
 			}
 		}
+	}
+
+	void Isnd_alias_list_t::dump(Game::XAssetHeader header)
+	{
+		Components::ZoneBuilder::GetExporter()->write(Game::XAssetType::ASSET_TYPE_SOUND, header.data);
+	}
+
+	Isnd_alias_list_t::Isnd_alias_list_t()
+	{
+		Components::Command::Add("dumpSound", [this](const Components::Command::Params* param)
+		{
+			const auto header = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_SOUND, param->get(1));
+			if (header.data)
+			{
+				Components::ZoneBuilder::RefreshExporterWorkDirectory();
+				this->dump(header);
+			}
+		});
 	}
 
 	void Isnd_alias_list_t::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)

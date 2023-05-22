@@ -548,21 +548,77 @@ namespace Components
 		}
 	}
 
+	void Weapon::PlayerCmd_InitialWeaponRaise(const Game::scr_entref_t entref)
+	{
+		auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
+		const auto* weapon = Game::Scr_GetString(0);
+		const auto index = Game::G_GetWeaponIndexForName(weapon);
+
+		auto* ps = &ent->client->ps;
+		if (!Game::BG_IsWeaponValid(ps, index))
+		{
+			Game::Scr_Error(Utils::String::VA("invalid InitialWeaponRaise: %s", weapon));
+			return;
+		}
+
+		assert(ps);
+
+		if (!index)
+		{
+			return;
+		}
+
+		auto* equippedWeapon = Game::BG_GetEquippedWeaponState(ps, index);
+		if (!equippedWeapon)
+		{
+			return;
+		}
+
+		equippedWeapon->usedBefore = false;
+		Game::Player_SwitchToWeapon(ent);
+	}
+
+	void Weapon::PlayerCmd_FreezeControlsAllowLook(const Game::scr_entref_t entref)
+	{
+		const auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
+
+		if (Game::Scr_GetInt(0))
+		{
+			ent->client->ps.weapCommon.weapFlags |= Game::PWF_DISABLE_WEAPONS;
+			ent->client->flags |= Game::CF_BIT_DISABLE_USABILITY;
+		}
+		else
+		{
+			ent->client->ps.weapCommon.weapFlags &= ~Game::PWF_DISABLE_WEAPONS;
+			ent->client->flags &= ~Game::CF_BIT_DISABLE_USABILITY;
+		}
+	}
+
 	void Weapon::AddScriptMethods()
 	{
-		Script::AddMethod("DisableWeaponPickup", [](Game::scr_entref_t entref)
+		GSC::Script::AddMethod("DisableWeaponPickup", [](const Game::scr_entref_t entref)
 		{
-			const auto* ent = Game::GetPlayerEntity(entref);
+			const auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
 
 			ent->client->ps.weapCommon.weapFlags |= Game::PWF_DISABLE_WEAPON_PICKUP;
 		});
 
-		Script::AddMethod("EnableWeaponPickup", [](Game::scr_entref_t entref)
+		GSC::Script::AddMethod("EnableWeaponPickup", [](const Game::scr_entref_t entref)
 		{
-			const auto* ent = Game::GetPlayerEntity(entref);
+			const auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
 
 			ent->client->ps.weapCommon.weapFlags &= ~Game::PWF_DISABLE_WEAPON_PICKUP;
 		});
+
+		// PlayerCmd_AreControlsFrozen GSC function from Black Ops 2
+		GSC::Script::AddMethod("AreControlsFrozen", [](Game::scr_entref_t entref) // Usage: self AreControlsFrozen();
+		{
+			const auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);
+			Game::Scr_AddBool((ent->client->flags & Game::CF_BIT_FROZEN) != 0);
+		});
+
+		GSC::Script::AddMethod("InitialWeaponRaise", PlayerCmd_InitialWeaponRaise);
+		GSC::Script::AddMethod("FreezeControlsAllowLook", PlayerCmd_FreezeControlsAllowLook);
 	}
 
 	Weapon::Weapon()

@@ -6482,6 +6482,14 @@ namespace Game
 
 	static_assert(sizeof(sval_u) == 0x4);
 
+	struct stype_t
+	{
+		sval_u val;
+		unsigned int pos;
+	};
+
+	static_assert(sizeof(stype_t) == 0x8);
+
 	struct scr_const_t
 	{
 		scr_string_t _;
@@ -7132,9 +7140,11 @@ namespace Game
 
 	enum
 	{
-		PF_NOCLIP = 1 << 0,
-		PF_UFO = 1 << 1,
-		PF_FROZEN = 1 << 2,
+		CF_BIT_NOCLIP = (1 << 0),
+		CF_BIT_UFO = (1 << 1),
+		CF_BIT_FROZEN = (1 << 2),
+		CF_BIT_DISABLE_USABILITY = (1 << 3),
+		CF_BIT_NO_KNOCKBACK = (1 << 4),
 	};
 
 	enum sessionState_t
@@ -7218,7 +7228,7 @@ namespace Game
 		float spectateDefaultAngles[3];
 	};
 
-	typedef struct gclient_s
+	struct gclient_s
 	{
 		playerState_s ps;
 		clientSession_t sess;
@@ -7239,9 +7249,9 @@ namespace Game
 		unsigned __int16 attachShieldTagName;
 		hintType_t hintForcedType;
 		int hintForcedString;
-	} gclient_t;
+	};
 
-	static_assert(sizeof(gclient_t) == 13932);
+	static_assert(sizeof(gclient_s) == 0x366C);
 
 	struct EntHandle
 	{
@@ -7292,11 +7302,11 @@ namespace Game
 		ENT_HANDLER_COUNT
 	};
 
-	typedef struct gentity_s
+	struct gentity_s
 	{
 		entityState_s s;
 		entityShared_t r;
-		gclient_t* client; // 344
+		gclient_s* client; // 344
 		void /*Turret*/* turret;
 		void /*Vehicle*/* vehicle;
 		int physObjId;
@@ -7334,7 +7344,7 @@ namespace Game
 		gentity_s* nextFree;
 		int birthTime;
 		char pad[100];
-	} gentity_t;
+	};
 
 	static_assert(sizeof(gentity_s) == 0x274);
 
@@ -7431,7 +7441,7 @@ namespace Game
 		int baselineSnap;
 	};
 
-	struct client_t
+	struct client_s
 	{
 		clientHeader_t header;
 		const char* dropReason; // 1624
@@ -7446,7 +7456,7 @@ namespace Game
 		usercmd_s lastUsercmd; // 134772
 		int lastClientCommand; // 134812
 		char lastClientCommandString[1024]; // 134816
-		gentity_t* gentity; // 135840
+		gentity_s* gentity; // 135840
 		char name[16]; // 135844
 		int nextReliableTime; // 135860
 		int lastPacketTime; // 135864
@@ -7485,7 +7495,7 @@ namespace Game
 		clientSnapshot_t frames[32];
 	};
 
-	static_assert(sizeof(client_t) == 0xA6790);
+	static_assert(sizeof(client_s) == 0xA6790);
 
 	enum CompassType
 	{
@@ -11001,6 +11011,31 @@ namespace Game
 	{
 		float origin[3];
 		snd_alias_list_t* aliasList;
+	};
+
+	struct nodetype
+	{
+		nodetype* left;
+		nodetype* right;
+		nodetype* parent;
+		int weight;
+		int symbol;
+	};
+
+	struct huff_t
+	{
+		int blocNode;
+		int blocPtrs;
+		nodetype* tree;
+		nodetype* loc[257];
+		nodetype** freelist;
+		nodetype nodeList[768];
+		nodetype* nodePtrs[768];
+	};
+
+	struct huffman_t
+	{
+		huff_t compressDecompress;
 	};
 
 #pragma endregion

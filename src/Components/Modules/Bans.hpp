@@ -9,7 +9,7 @@ namespace Components
 
 		Bans();
 
-		static void BanClient(Game::client_t* cl, const std::string& reason);
+		static void BanClient(Game::client_s* cl, const std::string& reason);
 		static void UnbanClient(SteamID id);
 		static void UnbanClient(Game::netIP_t ip);
 
@@ -29,5 +29,7 @@ namespace Components
 
 		static void LoadBans(BanList* list);
 		static void SaveBans(const BanList* list);
+
+		static void AddServerCommands();
 	};
 }

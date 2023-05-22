@@ -1,5 +1,6 @@
-﻿#include <STDInclude.hpp>
+#include <STDInclude.hpp>
 #include "Console.hpp"
+#include "TextRenderer.hpp"
 
 #include "Terminus_4.49.1.ttf.hpp"
 
@@ -34,14 +35,14 @@ namespace Components
 	bool Console::SkipShutdown = false;
 
 	COLORREF Console::TextColor = 
-#if _DEBUG
+#ifdef _DEBUG
 		RGB(255, 200, 117);
 #else
 		RGB(120, 237, 122);
 #endif
 
 	COLORREF Console::BackgroundColor =
-#if _DEBUG
+#ifdef _DEBUG
 		RGB(35, 21, 0);
 #else
 		RGB(25, 32, 25);
@@ -54,6 +55,8 @@ namespace Components
 	std::thread Console::ConsoleThread;
 
 	Game::SafeArea Console::OriginalSafeArea;
+
+	bool Console::isCommand;
 
 	const char** Console::GetAutoCompleteFileList(const char* path, const char* extension, Game::FsListBehavior_e behavior, int* numfiles, int allocTrackType)
 	{
@@ -95,14 +98,22 @@ namespace Components
 		}
 		else if (IsWindow(GetWindow()) != FALSE)
 		{
-			SetWindowTextA(GetWindow(), Utils::String::VA("IW4x(" VERSION ") : %s", hostname.data()));
+#ifdef EXPERIMENTAL_BUILD
+			SetWindowTextA(GetWindow(), Utils::String::Format("IW4x " REVISION_STR "-develop : {}", hostname));
+#else
+			SetWindowTextA(GetWindow(), Utils::String::Format("IW4x " REVISION_STR " : {}", hostname));
+#endif
 		}
 	}
 
 	void Console::ShowPrompt()
 	{
 		wattron(InputWindow, COLOR_PAIR(10) | A_BOLD);
-		wprintw(InputWindow, "%s> ", VERSION);
+#ifdef EXPERIMENTAL_BUILD
+		wprintw(InputWindow, "%s-develop> ", REVISION_STR);
+#else
+		wprintw(InputWindow, "%s> ", REVISION_STR);
+#endif
 	}
 
 	void Console::RefreshOutput()
@@ -383,6 +394,7 @@ namespace Components
 
 		RefreshOutput();
 
+#ifdef _DEBUG
 		if (IsDebuggerPresent())
 		{
 			while (true)
@@ -390,6 +402,7 @@ namespace Components
 				std::this_thread::sleep_for(5s);
 			}
 		}
+#endif
 
 		TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
 	}
@@ -424,38 +437,15 @@ namespace Components
 		RefreshOutput();
 	}
 
-	HFONT CALLBACK Console::ReplaceFont(
-		[[maybe_unused]] int cHeight,
-		int cWidth,
-		int cEscapement,
-		int cOrientation,
-		[[maybe_unused]] int cWeight,
-		DWORD bItalic,
-		DWORD bUnderline,
-		DWORD bStrikeOut,
-		DWORD iCharSet,
-		[[maybe_unused]] DWORD iOutPrecision,
-		DWORD iClipPrecision,
-		[[maybe_unused]] DWORD iQuality,
-		[[maybe_unused]] DWORD iPitchAndFamily,
-		[[maybe_unused]] LPCSTR pszFaceName)
+	HFONT CALLBACK Console::ReplaceFont([[maybe_unused]] int cHeight, int cWidth, int cEscapement, int cOrientation, [[maybe_unused]] int cWeight, DWORD bItalic, DWORD bUnderline,
+	                                    DWORD bStrikeOut, DWORD iCharSet, [[maybe_unused]] DWORD iOutPrecision, DWORD iClipPrecision, [[maybe_unused]] DWORD iQuality,
+	                                    [[maybe_unused]] DWORD iPitchAndFamily, [[maybe_unused]] LPCSTR pszFaceName)
 	{
-		HFONT font = CreateFontA(
-			12, 
-			cWidth, 
-			cEscapement, 
-			cOrientation, 
-			700, 
-			bItalic, 
-			bUnderline,
-			bStrikeOut, 
-			iCharSet, 
-			OUT_RASTER_PRECIS,
-			iClipPrecision, 
-			NONANTIALIASED_QUALITY,
-			0x31, 
-			"Terminus (TTF)"
-		); // Terminus (TTF)
+		HFONT font = CreateFontA(12, cWidth, cEscapement, cOrientation, 700, bItalic,
+		                         bUnderline, bStrikeOut, iCharSet, OUT_RASTER_PRECIS,
+		                         iClipPrecision, NONANTIALIASED_QUALITY, 0x31,
+		                         "Terminus (TTF)"
+		);
 
 		return font;
 	}
@@ -819,6 +809,20 @@ namespace Components
 		return reinterpret_cast<Game::Dvar_RegisterVec4_t>(0x471500)(dvarName, r, g, b, a, min, max, flags, description);
 	}
 
+	bool Console::Con_IsDvarCommand_Stub(const char* cmd)
+	{
+		isCommand = Game::Con_IsDvarCommand(cmd);
+		return isCommand;
+	}
+
+	void Console::Cmd_ForEach_Stub(void(*callback)(const char* str))
+	{
+		if (!isCommand)
+		{
+			Game::Cmd_ForEach(callback);
+		}
+	}
+
 	void Console::Con_ToggleConsole()
 	{
 		Game::Field_Clear(Game::g_consoleField);
@@ -857,7 +861,11 @@ namespace Components
 		AssertOffset(Game::clientUIActive_t, keyCatchers, 0x9B0);
 
 		// Console '%s: %s> ' string
-		Utils::Hook::Set<const char*>(0x5A44B4, "IW4x MP: " VERSION "> ");
+#ifdef EXPERIMENTAL_BUILD
+		Utils::Hook::Set<const char*>(0x5A44B4, "IW4x MP: " REVISION_STR "-develop> ");
+#else
+		Utils::Hook::Set<const char*>(0x5A44B4, "IW4x MP: " REVISION_STR "> ");
+#endif
 
 		// Patch console color
 		static float consoleColor[] = { 0.70f, 1.00f, 0.00f, 1.00f };
@@ -893,8 +901,12 @@ namespace Components
 		// Don't resize the console
 		Utils::Hook(0x64DC6B, 0x64DCC2, HOOK_JUMP).install()->quick();
 
+		// Con_DrawInput
+		Utils::Hook(0x5A45BD, Con_IsDvarCommand_Stub, HOOK_CALL).install()->quick();
+		Utils::Hook(0x5A466C, Cmd_ForEach_Stub, HOOK_CALL).install()->quick();
+
 #ifdef _DEBUG
-		Console::AddConsoleCommand();
+		AddConsoleCommand();
 #endif
 
 		if (Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())

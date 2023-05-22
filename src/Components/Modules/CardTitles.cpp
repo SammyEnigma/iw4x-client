@@ -1,5 +1,6 @@
 #include <STDInclude.hpp>
 #include "CardTitles.hpp"
+#include "Events.hpp"
 #include "ServerCommands.hpp"
 
 namespace Components
@@ -16,7 +17,7 @@ namespace Components
 	{
 		auto result = lookupResult;
 
-		const auto* username = Dvar::Var("name").get<const char*>();
+		const auto* username = Dvar::Name.get<const char*>();
 		if (std::strcmp(data->name, username) == 0)
 		{
 			result += 0xFE000000;
@@ -137,14 +138,13 @@ namespace Components
 			pop eax
 
 			cmp eax, 0
-			jz OriginalTitle
+			jz originalTitle
 
 			pop ecx
-			mov ecx, DWORD ptr[esi + 4]
+			mov ecx, dword ptr[esi + 4]
 			retn
 
-		OriginalTitle:
-
+		originalTitle:
 			mov eax, [esi + 50h]
 			cmp eax, 3
 
@@ -170,11 +170,10 @@ namespace Components
 				playerTitle[0] = '\0';
 			}
 
-			list.append(std::format("\\{}\\{}", std::to_string(i), playerTitle));
+			list.append(std::format("\\{}\\{}", i, playerTitle));
 		}
 
-		const auto* command = Utils::String::Format("{:c} customTitles \"{}\"", 21, list);
-		Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, command);
+		Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} customTitles \"{}\"", 21, list));
 	}
 
 	void CardTitles::ParseCustomTitles(const char* msg)
@@ -204,7 +203,7 @@ namespace Components
 
 		std::memset(&CustomTitles, 0, sizeof(char[Game::MAX_CLIENTS][18]));
 
-		ServerCommands::OnCommand(21, [](Command::Params* params)
+		ServerCommands::OnCommand(21, [](const Command::Params* params)
 		{
 			if (std::strcmp(params->get(1), "customTitles") == 0)
 			{
@@ -216,7 +215,6 @@ namespace Components
 			}
 
 			return false;
-
 		});
 
 		Utils::Hook(0x62EB26, GetPlayerCardClientInfoStub).install()->quick();

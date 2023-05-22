@@ -31,6 +31,8 @@ namespace Components
 
 		static std::unordered_map<std::uint32_t, int> RateLimit;
 
+		static std::vector<std::size_t> RconAddresses;
+
 		static Container RconContainer;
 		static Utils::Cryptography::ECC::Key RconKey;
 
@@ -45,5 +47,7 @@ namespace Components
 		static bool IsRateLimitCheckDisabled();
 		static bool RateLimitCheck(const Network::Address& address, int time);
 		static void RateLimitCleanup(int time);
+
+		static void RconExecuter(const Network::Address& address, std::string data);
 	};
 }

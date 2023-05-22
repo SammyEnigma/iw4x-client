@@ -8,21 +8,22 @@ namespace Components
 		PlayerMovement();
 
 	private:
-		enum BouncesSettings { DISABLED, ENABLED, DOUBLE };
+		enum BouncesSettings : int { DISABLED, ENABLED, DOUBLE };
 
 		static constexpr auto SURF_LADDER = 0x8;
 
-		static Dvar::Var BGRocketJump;
-		static Dvar::Var BGRocketJumpScale;
-		static Dvar::Var BGPlayerEjection;
-		static Dvar::Var BGPlayerCollision;
-		static Dvar::Var BGClimbAnything;
-		// Can't use Var class inside assembly stubs
+		static const Game::dvar_t* BGRocketJump;
+		static const Game::dvar_t* BGRocketJumpScale;
+		static const Game::dvar_t* BGPlayerEjection;
+		static const Game::dvar_t* BGPlayerCollision;
+		static const Game::dvar_t* BGClimbAnything;
 		static const Game::dvar_t* CGNoclipScaler;
 		static const Game::dvar_t* CGUfoScaler;
 		static const Game::dvar_t* PlayerSpectateSpeedScale;
 		static const Game::dvar_t* BGBounces;
 		static const Game::dvar_t* BGBouncesAllAngles;
+		static const Game::dvar_t* BGDisableLandingSlowdown;
+		static const Game::dvar_t* BGBunnyHopAuto;
 		static const Game::dvar_t* PlayerDuckedSpeedScale;
 		static const Game::dvar_t* PlayerProneSpeedScale;
 		
@@ -44,6 +45,9 @@ namespace Components
 		// Player collison
 		static int StuckInClient_Hk(Game::gentity_s* self);
 		static void CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles);
+
+		static void PM_CrashLand_Stub(const float* v, float scale, const float* result);
+		static void Jump_Check_Stub();
 
 		static void GScr_IsSprinting(Game::scr_entref_t entref);
 

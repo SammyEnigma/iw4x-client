@@ -1,5 +1,7 @@
 #include <STDInclude.hpp>
 #include "Debug.hpp"
+#include "Events.hpp"
+#include "TextRenderer.hpp"
 
 #include "Game/Engine/ScopedCriticalSection.hpp"
 
@@ -271,7 +273,7 @@ namespace Components
 		assert(0 && "a");
 	}
 
-	void Debug::Com_Bug_f(Command::Params* params)
+	void Debug::Com_Bug_f(const Command::Params* params)
 	{
 		char newFileName[MAX_PATH]{};
 		char to_ospath[MAX_OSPATH]{};
@@ -316,7 +318,7 @@ namespace Components
 
 	void Debug::Com_BugNameInc_f()
 	{
-		char buf[260]{};
+		char buf[512]{};
 
 		if (std::strlen(BugName->current.string) < 4)
 		{

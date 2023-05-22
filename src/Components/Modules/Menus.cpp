@@ -828,7 +828,7 @@ namespace Components
 		// make Com_Error and similar go back to main_text instead of menu_xboxlive.
 		Utils::Hook::SetString(0x6FC790, "main_text");
 
-		Command::Add("openmenu", [](Command::Params* params)
+		Command::Add("openmenu", [](const Command::Params* params)
 		{
 			if (params->size() != 2)
 			{
@@ -845,7 +845,7 @@ namespace Components
 			Game::Menus_OpenByName(Game::uiContext, params->get(1));
 		});
 
-		Command::Add("reloadmenus", []([[maybe_unused]] Command::Params* params)
+		Command::Add("reloadmenus", []()
 		{
 			// Close all menus
 			Game::Menus_CloseAll(Game::uiContext);
@@ -868,31 +868,26 @@ namespace Components
 			}
 		});
 
-		Command::Add("mp_QuickMessage", [](Command::Params*)
-		{
-			Command::Execute("openmenu quickmessage");
-		});
-
 		// Define custom menus here
 		Add("ui_mp/changelog.menu");
-		Add("ui_mp/theater_menu.menu");
-		Add("ui_mp/pc_options_multi.menu");
+		Add("ui_mp/iw4x_credits.menu");
+		Add("ui_mp/menu_first_launch.menu");
+		Add("ui_mp/mod_download_popmenu.menu");
 		Add("ui_mp/pc_options_game.menu");
 		Add("ui_mp/pc_options_gamepad.menu");
+		Add("ui_mp/pc_options_multi.menu");
+		Add("ui_mp/popup_customclan.menu");
+		Add("ui_mp/popup_customtitle.menu");
+		Add("ui_mp/popup_friends.menu");
+		Add("ui_mp/resetclass.menu");
+		Add("ui_mp/security_increase_popmenu.menu");
+		Add("ui_mp/startup_messages.menu");
 		Add("ui_mp/stats_reset.menu");
 		Add("ui_mp/stats_unlock.menu");
-		Add("ui_mp/security_increase_popmenu.menu");
-		Add("ui_mp/mod_download_popmenu.menu");
-		Add("ui_mp/popup_friends.menu");
-		Add("ui_mp/menu_first_launch.menu");
-		Add("ui_mp/startup_messages.menu");
-		Add("ui_mp/iw4x_credits.menu");
-		Add("ui_mp/resetclass.menu");
-		Add("ui_mp/popup_customtitle.menu");
-		Add("ui_mp/popup_customclan.menu");
+		Add("ui_mp/theater_menu.menu");
 	}
 
-	Menus::~Menus()
+	void Menus::preDestroy()
 	{
 		// Let Windows handle the memory leaks for you!
 		Menus::FreeEverything();

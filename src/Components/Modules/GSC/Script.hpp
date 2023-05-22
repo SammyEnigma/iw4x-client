@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Components
+namespace Components::GSC
 {
 	class Script : public Component
 	{
@@ -14,30 +14,9 @@ namespace Components
 		static void AddFuncMultiple(Game::BuiltinFunction func, bool type, scriptNames);
 		static void AddMethMultiple(Game::BuiltinMethod func, bool type, scriptNames);
 
-		static Game::client_t* GetClient(const Game::gentity_t* gentity);
-
-		static const char* GetCodePosForParam(int index);
-
+		static Game::client_s* GetClient(const Game::gentity_s* gentity);
 		// Probably a macro 'originally' but this is fine
-		static Game::gentity_s* Scr_GetPlayerEntity(Game::scr_entref_t entref)
-		{
-			if (entref.classnum != 0)
-			{
-				Game::Scr_ObjectError("not an entity");
-				return nullptr;
-			}
-
-			assert(entref.entnum < Game::MAX_GENTITIES);
-
-			auto* ent = &Game::g_entities[entref.entnum];
-			if (ent->client == nullptr)
-			{
-				Game::Scr_ObjectError(Utils::String::VA("entity %i is not a player", entref.entnum));
-				return nullptr;
-			}
-
-			return ent;
-		}
+		static Game::gentity_s* Scr_GetPlayerEntity(Game::scr_entref_t entref);
 
 	private:
 		struct ScriptFunction
@@ -60,8 +39,8 @@ namespace Components
 		static std::unordered_map<std::string, int> ScriptMainHandles;
 		static std::unordered_map<std::string, int> ScriptInitHandles;
 
-		static std::unordered_map<const char*, const char*> ReplacedFunctions;
-		static const char* ReplacedPos;
+		static void LoadCustomScriptsFromFolder(const char* dir);
+		static void LoadCustomScripts();
 
 		static void Scr_LoadGameType_Stub();
 		static void Scr_StartupGameType_Stub();
@@ -71,11 +50,5 @@ namespace Components
 		static Game::BuiltinMethod BuiltIn_GetMethodStub(const char** pName, int* type);
 
 		static unsigned int SetExpFogStub();
-
-		static void GetReplacedPos(const char* pos);
-		static void SetReplacedPos(const char* what, const char* with);
-		static void VMExecuteInternalStub();
-
-		static void AddFunctions();
 	};
 }

@@ -25,10 +25,12 @@ namespace Game
 	Cmd_AddCommand_t Cmd_AddCommand = Cmd_AddCommand_t(0x470090);
 	Cmd_AddServerCommand_t Cmd_AddServerCommand = Cmd_AddServerCommand_t(0x4DCE00);
 	Cmd_ExecuteSingleCommand_t Cmd_ExecuteSingleCommand = Cmd_ExecuteSingleCommand_t(0x609540);
+	Cmd_ForEach_t Cmd_ForEach = Cmd_ForEach_t(0x45D680);
 
 	Con_DrawMiniConsole_t Con_DrawMiniConsole = Con_DrawMiniConsole_t(0x464F30);
 	Con_DrawSolidConsole_t Con_DrawSolidConsole = Con_DrawSolidConsole_t(0x5A5040);
 	Con_CancelAutoComplete_t Con_CancelAutoComplete = Con_CancelAutoComplete_t(0x435580);
+	Con_IsDvarCommand_t Con_IsDvarCommand = Con_IsDvarCommand_t(0x5A3FF0);
 
 	DB_AllocStreamPos_t DB_AllocStreamPos = DB_AllocStreamPos_t(0x418380);
 	DB_PushStreamPos_t DB_PushStreamPos = DB_PushStreamPos_t(0x458A20);
@@ -91,7 +93,7 @@ namespace Game
 	MSG_ReadLong_t MSG_ReadLong = MSG_ReadLong_t(0x4C9550);
 	MSG_ReadShort_t MSG_ReadShort = MSG_ReadShort_t(0x40BDD0);
 	MSG_ReadInt64_t MSG_ReadInt64 = MSG_ReadInt64_t(0x4F1850);
-	MSG_ReadString_t MSG_ReadString = MSG_ReadString_t(0x60E2B0);
+	MSG_ReadBigString_t  MSG_ReadBigString = MSG_ReadBigString_t(0x60E2B0);
 	MSG_ReadStringLine_t MSG_ReadStringLine = MSG_ReadStringLine_t(0x4FEF30);
 	MSG_WriteByte_t MSG_WriteByte = MSG_WriteByte_t(0x48C520);
 	MSG_WriteData_t MSG_WriteData = MSG_WriteData_t(0x4F4120);
@@ -103,11 +105,13 @@ namespace Game
 	MSG_ReadDeltaUsercmdKey_t MSG_ReadDeltaUsercmdKey = MSG_ReadDeltaUsercmdKey_t(0x491F00);
 	MSG_ReadBitsCompress_t MSG_ReadBitsCompress = MSG_ReadBitsCompress_t(0x4DCC30);
 	MSG_WriteBitsCompress_t MSG_WriteBitsCompress = MSG_WriteBitsCompress_t(0x4319D0);
+	Huff_offsetReceive_t Huff_offsetReceive = Huff_offsetReceive_t(0x466060);
 
 	NetadrToSockadr_t NetadrToSockadr = NetadrToSockadr_t(0x4B4B40);
 
 	NET_AdrToString_t NET_AdrToString = NET_AdrToString_t(0x469880);
 	NET_CompareAdr_t NET_CompareAdr = NET_CompareAdr_t(0x4D0AA0);
+	NET_CompareBaseAdr_t NET_CompareBaseAdr = NET_CompareBaseAdr_t(0x455510);
 	NET_DeferPacketToClient_t NET_DeferPacketToClient = NET_DeferPacketToClient_t(0x4C8AA0);
 	NET_ErrorString_t NET_ErrorString = NET_ErrorString_t(0x4E7720);
 	NET_Init_t NET_Init = NET_Init_t(0x491860);
@@ -213,13 +217,6 @@ namespace Game
 	Weapon_RocketLauncher_Fire_t Weapon_RocketLauncher_Fire = Weapon_RocketLauncher_Fire_t(0x424680);
 	Bullet_Fire_t Bullet_Fire = Bullet_Fire_t(0x4402C0);
 
-	Jump_ClearState_t Jump_ClearState = Jump_ClearState_t(0x04B3890);
-	PM_playerTrace_t PM_playerTrace = PM_playerTrace_t(0x458980);
-	PM_Trace_t PM_Trace = PM_Trace_t(0x441F60);
-	PM_GetEffectiveStance_t PM_GetEffectiveStance = PM_GetEffectiveStance_t(0x412540);
-	PM_UpdateLean_t PM_UpdateLean = PM_UpdateLean_t(0x43DED0);
-	PM_IsSprinting_t PM_IsSprinting = PM_IsSprinting_t(0x4B3830);
-
 	IN_RecenterMouse_t IN_RecenterMouse = IN_RecenterMouse_t(0x463D80);
 
 	IN_MouseMove_t IN_MouseMove = IN_MouseMove_t(0x64C490);
@@ -241,6 +238,7 @@ namespace Game
 
 	I_strncpyz_t I_strncpyz = I_strncpyz_t(0x4D6F80);
 	I_CleanStr_t I_CleanStr = I_CleanStr_t(0x4AD470);
+	I_isdigit_t I_isdigit = I_isdigit_t(0x4E71E0);
 
 	XNAddrToString_t XNAddrToString = XNAddrToString_t(0x452690);
 
@@ -321,8 +319,6 @@ namespace Game
 
 	infoParm_t* infoParams = reinterpret_cast<infoParm_t*>(0x79D260); // Count 0x1E
 
-	clientState_t* clcState = reinterpret_cast<clientState_t*>(0xB2C540);
-
 	GfxScene* scene = reinterpret_cast<GfxScene*>(0x6944914);
 
 	Console* con = reinterpret_cast<Console*>(0x9FCCF8);
@@ -396,6 +392,8 @@ namespace Game
 
 	bool* s_havePlaylists = reinterpret_cast<bool*>(0x1AD3680);
 
+	huffman_t* msgHuff = reinterpret_cast<huffman_t*>(0x1CB9EC0);
+
 	const char* TableLookup(StringTable* stringtable, int row, int column)
 	{
 		if (!stringtable || !stringtable->values || row >= stringtable->rowCount || column >= stringtable->columnCount) return "";
@@ -404,25 +402,6 @@ namespace Game
 		if (!value) value = "";
 
 		return value;
-	}
-
-	const char* UI_LocalizeMapName(const char* mapName)
-	{
-		for (int i = 0; i < *arenaCount; ++i)
-		{
-			if (!_stricmp(Components::ArenaLength::NewArenas[i].mapName, mapName))
-			{
-				char* uiName = &Components::ArenaLength::NewArenas[i].uiName[0];
-				if ((uiName[0] == 'M' && uiName[1] == 'P') || (uiName[0] == 'P' && uiName[1] == 'A')) // MPUI/PATCH
-				{
-					return SEH_StringEd_GetString(uiName);
-				}
-
-				return uiName;
-			}
-		}
-
-		return mapName;
 	}
 
 	const char* UI_LocalizeGameType(const char* gameType)
@@ -784,7 +763,6 @@ namespace Game
 		I_strncpyz_s(dest, destsize, src, destsize);
 	}
 
-#pragma optimize("", off)
 	__declspec(naked) float UI_GetScoreboardLeft(void* /*a1*/)
 	{
 		__asm
@@ -1178,7 +1156,7 @@ namespace Game
 	int SEH_GetLocalizedTokenReference(char* token, const char* reference, const char* messageType, msgLocErrType_t errType)
 	{
 		static DWORD SEH_GetLocalizedTokenReference_t = 0x629BB0;
-		auto answer = 0;
+		auto result = 0;
 
 		__asm
 		{
@@ -1189,12 +1167,23 @@ namespace Game
 			push token
 			call SEH_GetLocalizedTokenReference_t
 			add esp, 0x4
-			mov answer, eax
+			mov result, eax
 			popad
 		}
 
-		return answer;
+		return result;
 	}
 
-#pragma optimize("", on)
+	void Player_SwitchToWeapon(gentity_s* player)
+	{
+		static DWORD Player_SwitchToWeapon_t = 0x5D97B0;
+
+		__asm
+		{
+			pushad
+			mov ebx, player
+			call Player_SwitchToWeapon_t
+			popad
+		}
+	}
 }

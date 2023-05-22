@@ -1,12 +1,15 @@
 #include <STDInclude.hpp>
 #include <proto/rcon.pb.h>
 
+#include "Events.hpp"
 #include "RCon.hpp"
 #include "Party.hpp"
 
 namespace Components
 {
 	std::unordered_map<std::uint32_t, int> RCon::RateLimit;
+
+	std::vector<std::size_t> RCon::RconAddresses;
 
 	RCon::Container RCon::RconContainer;
 	Utils::Cryptography::ECC::Key RCon::RconKey;
@@ -19,7 +22,7 @@ namespace Components
 
 	void RCon::AddCommands()
 	{
-		Command::Add("rcon", [](Command::Params* params)
+		Command::Add("rcon", [](const Command::Params* params)
 		{
 			if (params->size() < 2) return;
 
@@ -58,7 +61,7 @@ namespace Components
 			Logger::Print("You are connected to an invalid server\n");
 		});
 
-		Command::Add("remoteCommand", [](Command::Params* params)
+		Command::Add("remoteCommand", [](const Command::Params* params)
 		{
 			if (params->size() < 2) return;
 
@@ -76,6 +79,23 @@ namespace Components
 				Network::SendCommand(target, "rconRequest");
 			}
 		});
+
+		Command::AddSV("RconWhitelistAdd", [](const Command::Params* params)
+		{
+			if (params->size() < 2)
+			{
+				Logger::Print("Usage: %s <ip-address>\n", params->get(0));
+				return;
+			}
+
+			Network::Address address(params->get(1));
+			const auto hash = std::hash<std::uint32_t>()(*reinterpret_cast<const std::uint32_t*>(&address.getIP().bytes[0]));
+
+			if (address.isValid() && std::ranges::find(RconAddresses, hash) == RconAddresses.end())
+			{
+				RconAddresses.push_back(hash);
+			}
+		});
 	}
 
 	bool RCon::IsRateLimitCheckDisabled()
@@ -91,12 +111,6 @@ namespace Components
 	bool RCon::RateLimitCheck(const Network::Address& address, const int time)
 	{
 		const auto ip = address.getIP();
-
-		if (!RateLimit.contains(ip.full))
-		{
-			RateLimit[ip.full] = 0;
-		}
-
 		const auto lastTime = RateLimit[ip.full];
 
 		if (lastTime && (time - lastTime) < RconTimeout.get<int>())
@@ -124,9 +138,66 @@ namespace Components
 		}
 	}
 
+	void RCon::RconExecuter(const Network::Address& address, std::string data)
+	{
+		Utils::String::Trim(data);
+
+		const auto pos = data.find_first_of(' ');
+		if (pos == std::string::npos)
+		{
+			Logger::Print(Game::CON_CHANNEL_NETWORK, "Invalid RCon request from {}\n", address.getString());
+			return;
+		}
+
+		auto password = data.substr(0, pos);
+		auto command = data.substr(pos + 1);
+
+		// B3 sends the password inside quotes :S
+		if (!password.empty() && password[0] == '"' && password.back() == '"')
+		{
+			password.pop_back();
+			password.erase(password.begin());
+		}
+
+		const auto svPassword = RconPassword.get<std::string>();
+		if (svPassword.empty())
+		{
+			Logger::Print(Game::CON_CHANNEL_NETWORK, "RCon request from {} dropped. No password set!\n", address.getString());
+			return;
+		}
+
+		if (svPassword != password)
+		{
+			Logger::Print(Game::CON_CHANNEL_NETWORK, "Invalid RCon password sent from {}\n", address.getString());
+			return;
+		}
+
+		static std::string outputBuffer;
+		outputBuffer.clear();
+
+#ifndef _DEBUG
+		if (RconLogRequests.get<bool>())
+#endif
+		{
+			Logger::Print(Game::CON_CHANNEL_NETWORK, "Executing RCon request from {}: {}\n", address.getString(), command);
+		}
+
+		Logger::PipeOutput([](const std::string& output)
+		{
+			outputBuffer.append(output);
+		});
+
+		Command::Execute(command, true);
+
+		Logger::PipeOutput(nullptr);
+
+		Network::SendCommand(address, "print", outputBuffer);
+		outputBuffer.clear();
+	}
+
 	RCon::RCon()
 	{
-		AddCommands();
+		Events::OnSVInit(AddCommands);
 
 		if (!Dedicated::IsEnabled())
 		{
@@ -180,6 +251,12 @@ namespace Components
 
 		Network::OnClientPacket("rcon", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
+			const auto hash = std::hash<std::uint32_t>()(*reinterpret_cast<const std::uint32_t*>(&address.getIP().bytes[0]));
+			if (!RconAddresses.empty() && std::ranges::find(RconAddresses, hash) == RconAddresses.end())
+			{
+				return;
+			}
+
 			const auto time = Game::Sys_Milliseconds();
 			if (!IsRateLimitCheckDisabled() && !RateLimitCheck(address, time))
 			{
@@ -188,61 +265,11 @@ namespace Components
 
 			RateLimitCleanup(time);
 
-			std::string data_ = data;
-			Utils::String::Trim(data_);
-
-			const auto pos = data.find_first_of(' ');
-			if (pos == std::string::npos)
+			auto rconData = data;
+			Scheduler::Once([address, s = std::move(rconData)]
 			{
-				Logger::Print(Game::CON_CHANNEL_NETWORK, "Invalid RCon request from {}\n", address.getString());
-				return;
-			}
-
-			auto password = data.substr(0, pos);
-			auto command = data.substr(pos + 1);
-
-			// B3 sends the password inside quotes :S
-			if (!password.empty() && password[0] == '"' && password.back() == '"')
-			{
-				password.pop_back();
-				password.erase(password.begin());
-			}
-
-			const auto svPassword = RconPassword.get<std::string>();
-
-			if (svPassword.empty())
-			{
-				Logger::Print(Game::CON_CHANNEL_NETWORK, "RCon request from {} dropped. No password set!\n", address.getString());
-				return;
-			}
-
-			if (svPassword != password)
-			{
-				Logger::Print(Game::CON_CHANNEL_NETWORK, "Invalid RCon password sent from {}\n", address.getString());
-				return;
-			}
-
-			static std::string outputBuffer;
-			outputBuffer.clear();
-
-#ifndef DEBUG
-			if (RconLogRequests.get<bool>())
-#endif
-			{
-				Logger::Print(Game::CON_CHANNEL_NETWORK, "Executing RCon request from {}: {}\n", address.getString(), command);
-			}
-
-			Logger::PipeOutput([](const std::string& output)
-			{
-				outputBuffer.append(output);
-			});
-
-			Command::Execute(command, true);
-
-			Logger::PipeOutput(nullptr);
-
-			Network::SendCommand(address, "print", outputBuffer);
-			outputBuffer.clear();
+				RconExecuter(address, s);
+			}, Scheduler::Pipeline::MAIN);
 		});
 
 		Network::OnClientPacket("rconRequest", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
